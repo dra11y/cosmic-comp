@@ -2468,6 +2468,11 @@ impl Shell {
             increment: zoom_config.increment,
             movement: zoom_config.view_moves,
         });
+
+        if toggled {
+            let original_position = seat.get_pointer().unwrap().current_location().as_global();
+            self.update_focal_point(seat, original_position, zoom_config.view_moves);
+        }
     }
 
     pub fn update_focal_point(
