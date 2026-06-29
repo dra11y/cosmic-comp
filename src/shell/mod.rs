@@ -2462,17 +2462,24 @@ impl Shell {
             });
         }
 
-        self.zoom_state = Some(ZoomState {
+        let mut zoom_state = ZoomState {
             seat: seat.clone(),
             show_overlay: zoom_config.show_overlay,
             increment: zoom_config.increment,
             movement: zoom_config.view_moves,
-        });
+        };
 
         if toggled {
-            let original_position = seat.get_pointer().unwrap().current_location().as_global();
-            self.update_focal_point(seat, original_position, zoom_config.view_moves);
+            let cursor_position = seat.get_pointer().unwrap().current_location().as_global();
+            zoom_state.update_focal_point(
+                &seat.active_output(),
+                cursor_position,
+                cursor_position,
+                zoom_config.view_moves,
+            );
         }
+
+        self.zoom_state = Some(zoom_state);
     }
 
     pub fn update_focal_point(
