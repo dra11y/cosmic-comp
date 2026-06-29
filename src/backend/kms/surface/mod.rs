@@ -1051,6 +1051,15 @@ impl SurfaceThreadState {
             remove_frame_flags |= FrameFlags::ALLOW_OVERLAY_PLANE_SCANOUT;
         }
 
+        if self
+            .shell
+            .read()
+            .zoom_state()
+            .is_some_and(|zoom| zoom.current_level(&self.output) > 1.0)
+        {
+            remove_frame_flags |= FrameFlags::ALLOW_OVERLAY_PLANE_SCANOUT;
+        }
+
         let mut vrr = matches!(self.vrr_mode, AdaptiveSync::Force);
 
         if self.vrr_mode == AdaptiveSync::Enabled {
