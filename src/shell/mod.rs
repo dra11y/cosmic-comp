@@ -2482,7 +2482,7 @@ impl Shell {
         };
 
         if toggled {
-            state.reset_focal_point(&seat.active_output(), zoom_config.view_moves);
+            state.reset_focal_point(&seat.active_output());
         }
 
         self.zoom_state = Some(state);
