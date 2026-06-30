@@ -1557,7 +1557,7 @@ impl Common {
             let movement = self.config.cosmic_conf.accessibility_zoom.view_moves;
             if movement != zoom_state.movement {
                 let seat = zoom_state.current_seat();
-                let output = zoom_state.current_seat().active_output();
+                let output = seat.active_output();
                 let original_position = zoom_state.current_focal_point(Some(&output));
                 let cursor_position = seat.get_pointer().unwrap().current_location().as_global();
                 zoom_state.update_focal_point(
