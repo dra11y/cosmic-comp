@@ -252,6 +252,9 @@ impl ZoomState {
             .to_global(output)
     }
 
+    /// Updates the zoom focal point and `movement` without animation and regardless of [ZoomMovement].
+    /// Prevents stale focal point when zoom is first toggled on.
+    /// https://github.com/pop-os/cosmic-comp/issues/2511
     pub fn reset_focal_point(&mut self, output: &Output, movement: ZoomMovement) {
         let cursor_position = self
             .seat
@@ -260,12 +263,11 @@ impl ZoomState {
             .current_location()
             .as_global();
 
-        let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
-        let mut output_state_ref = output_state.lock().unwrap();
-
-        output_state_ref.previous_point = None;
         self.movement = movement;
 
+        let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
+        let mut output_state_ref = output_state.lock().unwrap();
+        output_state_ref.previous_point = None;
         output_state_ref.focal_point = cursor_position.to_local(output);
     }
 
