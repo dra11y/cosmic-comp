@@ -252,6 +252,23 @@ impl ZoomState {
             .to_global(output)
     }
 
+    pub fn reset_focal_point(&mut self, output: &Output, movement: ZoomMovement) {
+        let cursor_position = self
+            .seat
+            .get_pointer()
+            .unwrap()
+            .current_location()
+            .as_global();
+
+        let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
+        let mut output_state_ref = output_state.lock().unwrap();
+
+        output_state_ref.previous_point = None;
+        self.movement = movement;
+
+        output_state_ref.focal_point = cursor_position.to_local(output);
+    }
+
     pub fn update_focal_point(
         &mut self,
         output: &Output,
