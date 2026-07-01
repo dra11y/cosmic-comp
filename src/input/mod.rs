@@ -35,6 +35,7 @@ use calloop::{
 use cosmic_comp_config::{NumlockState, workspace::WorkspaceLayout};
 use cosmic_settings_config::shortcuts;
 use cosmic_settings_config::shortcuts::action::{Direction, ResizeDirection};
+use indexmap::Equivalent;
 use smithay::{
     backend::input::{
         AbsolutePositionEvent, Axis, AxisRelativeDirection, AxisSource, Device, DeviceCapability,
@@ -780,7 +781,6 @@ impl State {
                     // see: https://gitlab.freedesktop.org/wayland/wayland/-/issues/294
                     if !seat.get_pointer().unwrap().is_grabbed() {
                         let output = seat.active_output();
-
                         let global_position =
                             seat.get_pointer().unwrap().current_location().as_global();
                         let under = {
@@ -788,9 +788,16 @@ impl State {
                             State::element_under(global_position, &output, &shell, &seat)
                         };
                         if let Some(target) = under {
+                            let mods = &self.common.config.cosmic_conf.window_drag_modifier;
+                            let state = seat.get_keyboard().unwrap().modifier_state();
+
                             if let Some(surface) = target.toplevel().map(Cow::into_owned)
-                                && seat.get_keyboard().unwrap().modifier_state().logo
                                 && !shortcuts_inhibited
+                                && !mods.is_empty()
+                                && state.logo == mods.logo
+                                && state.alt == mods.alt
+                                && state.ctrl == mods.ctrl
+                                && state.shift == mods.shift
                             {
                                 let seat_clone = seat.clone();
                                 let mouse_button = PointerButtonEvent::button(&event);

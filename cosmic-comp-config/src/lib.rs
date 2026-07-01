@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-only
 
 use cosmic_config::{CosmicConfigEntry, cosmic_config_derive::CosmicConfigEntry};
+use cosmic_settings_config::shortcuts::{Modifiers, ModifiersDef};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Deref};
 
 use crate::input::TouchpadOverride;
 
@@ -66,6 +67,49 @@ impl Default for AppearanceConfig {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct WindowDragModifier(pub Modifiers);
+
+impl WindowDragModifier {
+    pub fn is_empty(&self) -> bool {
+        !(self.0.logo || self.0.alt || self.0.ctrl || self.0.shift)
+    }
+}
+
+impl Deref for WindowDragModifier {
+    type Target = Modifiers;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Default for WindowDragModifier {
+    fn default() -> Self {
+        Self(Modifiers::new().logo())
+    }
+}
+
+impl Serialize for WindowDragModifier {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        let def = ModifiersDef::from(self.0.clone());
+        def.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for WindowDragModifier {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let def: ModifiersDef = ModifiersDef::deserialize(deserializer)?;
+        Ok(WindowDragModifier(def.into()))
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, CosmicConfigEntry)]
 #[version = 1]
 pub struct CosmicCompConfig {
@@ -102,6 +146,7 @@ pub struct CosmicCompConfig {
     /// Hide the cursor after this many seconds of pointer inactivity (None disables)
     pub cursor_hide_timeout: Option<u32>,
     pub activation_policy: ActivationPolicy,
+    pub window_drag_modifier: WindowDragModifier,
 }
 
 impl Default for CosmicCompConfig {
@@ -140,6 +185,7 @@ impl Default for CosmicCompConfig {
             appearance_settings: AppearanceConfig::default(),
             cursor_hide_timeout: None,
             activation_policy: ActivationPolicy::default(),
+            window_drag_modifier: WindowDragModifier::default(),
         }
     }
 }
