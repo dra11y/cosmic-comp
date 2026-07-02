@@ -1569,7 +1569,6 @@ impl Common {
                     movement,
                 );
             }
-            zoom_state.movement = self.config.cosmic_conf.accessibility_zoom.view_moves;
             zoom_state.show_overlay = self.config.cosmic_conf.accessibility_zoom.show_overlay;
 
             for output in shell_ref.workspaces.sets.keys() {
@@ -2449,6 +2448,21 @@ impl Shell {
             return;
         }
 
+        let mut zoom_state = ZoomState {
+            seat: seat.clone(),
+            show_overlay: zoom_config.show_overlay,
+            increment: zoom_config.increment,
+            movement: zoom_config.view_moves,
+        };
+
+        let cursor_position = seat.get_pointer().unwrap().current_location().as_global();
+        zoom_state.update_focal_point(
+            &seat.active_output(),
+            cursor_position,
+            cursor_position,
+            zoom_config.view_moves,
+        );
+
         for output in &outputs {
             let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
             output_state.lock().unwrap().update(
@@ -2477,12 +2491,7 @@ impl Shell {
             });
         }
 
-        self.zoom_state = Some(ZoomState {
-            seat: seat.clone(),
-            show_overlay: zoom_config.show_overlay,
-            increment: zoom_config.increment,
-            movement: zoom_config.view_moves,
-        });
+        self.zoom_state = Some(zoom_state);
     }
 
     pub fn update_focal_point(
