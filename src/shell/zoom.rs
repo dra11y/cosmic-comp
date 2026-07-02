@@ -27,7 +27,7 @@ use smithay::{
         },
     },
     output::Output,
-    utils::{IsAlive, Point, Rectangle, Serial, Size},
+    utils::{FrameExtents, IsAlive, Point, Rectangle, Serial, Size},
 };
 use tracing::error;
 
@@ -271,51 +271,51 @@ impl ZoomState {
             self.movement = movement;
         }
 
-        let cursor_position = cursor_position.to_local(output);
         match movement {
-            ZoomMovement::Continuously => output_state_ref.focal_point = cursor_position,
+            ZoomMovement::Continuously => {
+                output_state_ref.focal_point = cursor_position.to_local(output)
+            }
+
             ZoomMovement::OnEdge => {
-                if !zoomed_output_geometry
-                    .overlaps_or_touches(Rectangle::new(original_position, Size::from((16., 16.))))
-                {
-                    zoomed_output_geometry.loc = cursor_position.to_global(output)
-                        - zoomed_output_geometry.size.downscale(2.).to_point();
-                    let mut focal_point = zoomed_output_geometry
-                        .loc
-                        .to_local(output)
-                        .upscale(output_state_ref.level)
-                        .to_global(output);
-                    focal_point.x = focal_point.x.clamp(
+                let margin_size = zoomed_output_geometry.size.h * 0.05;
+                let margins = FrameExtents::new(margin_size, margin_size, margin_size, margin_size);
+                let inner_rect = zoomed_output_geometry - margins;
+                if !inner_rect.contains(cursor_position) {
+                    let dx = if cursor_position.x < inner_rect.loc.x {
+                        cursor_position.x - inner_rect.loc.x
+                    } else if cursor_position.x > inner_rect.loc.x + inner_rect.size.w {
+                        cursor_position.x - (inner_rect.loc.x + inner_rect.size.w)
+                    } else {
+                        0.0
+                    };
+                    let dy = if cursor_position.y < inner_rect.loc.y {
+                        cursor_position.y - inner_rect.loc.y
+                    } else if cursor_position.y > inner_rect.loc.y + inner_rect.size.h {
+                        cursor_position.y - (inner_rect.loc.y + inner_rect.size.h)
+                    } else {
+                        0.0
+                    };
+                    let focal_global = output_state_ref.focal_point.to_global(output);
+                    let mut focal_new = focal_global
+                        + Point::new(dx * output_state_ref.level, dy * output_state_ref.level);
+                    focal_new.x = focal_new.x.clamp(
                         output_geometry.loc.x,
-                        output_geometry.loc.x + output_geometry.size.w - 1.,
+                        output_geometry.loc.x + output_geometry.size.w - 1.0,
                     );
-                    focal_point.y = focal_point.y.clamp(
+                    focal_new.y = focal_new.y.clamp(
                         output_geometry.loc.y,
-                        output_geometry.loc.y + output_geometry.size.h - 1.,
+                        output_geometry.loc.y + output_geometry.size.h - 1.0,
                     );
+
                     output_state_ref.previous_point =
                         Some((output_state_ref.focal_point, Instant::now()));
-                    output_state_ref.focal_point = focal_point.to_local(output);
-                } else if !zoomed_output_geometry.contains(cursor_position.to_global(output)) {
-                    let mut diff = output_state_ref.focal_point.to_global(output)
-                        + (cursor_position.to_global(output) - original_position)
-                            .upscale(output_state_ref.level);
-                    diff.x = diff.x.clamp(
-                        output_geometry.loc.x,
-                        (output_geometry.loc.x + output_geometry.size.w).next_down(),
-                    );
-                    diff.y = diff.y.clamp(
-                        output_geometry.loc.y,
-                        (output_geometry.loc.y + output_geometry.size.h).next_down(),
-                    );
-                    diff -= output_state_ref.focal_point.to_global(output);
-
-                    output_state_ref.focal_point += diff.as_logical().as_local();
+                    output_state_ref.focal_point = focal_new.to_local(output);
                 }
             }
+
             ZoomMovement::Centered => {
-                zoomed_output_geometry.loc = cursor_position.to_global(output)
-                    - zoomed_output_geometry.size.downscale(2.).to_point();
+                zoomed_output_geometry.loc =
+                    cursor_position - zoomed_output_geometry.size.downscale(2.).to_point();
 
                 let mut focal_point = zoomed_output_geometry
                     .loc
