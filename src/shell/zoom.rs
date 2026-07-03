@@ -7,7 +7,7 @@ use cosmic::{
     iced_widget, theme,
     widget::{self, icon::Named},
 };
-use cosmic_comp_config::ZoomMovement;
+use cosmic_comp_config::{ZoomConfig, ZoomMovement};
 use cosmic_config::ConfigSet;
 use keyframe::{ease, functions::Linear};
 use smithay::{
@@ -36,6 +36,7 @@ use crate::{
     utils::{
         iced::{IcedElement, Program},
         prelude::*,
+        tween::EasePoint,
     },
 };
 
@@ -50,13 +51,14 @@ pub struct ZoomState {
     pub(super) seat: Seat<State>,
     pub(super) show_overlay: bool,
     pub(super) increment: u32,
-    pub(super) movement: ZoomMovement,
+    movement: ZoomMovement,
 }
 
 #[derive(Debug)]
 pub struct OutputZoomState {
     pub(super) level: f64,
     pub(super) previous_level: Option<(f64, Instant)>,
+    previous_point: Option<(Point<f64, Local>, Instant)>,
     focal_point: Point<f64, Local>,
     element: ZoomElement,
 }
@@ -87,6 +89,7 @@ impl OutputZoomState {
             level,
             previous_level: None,
             focal_point,
+            previous_point: None,
             element,
         }
     }
@@ -159,6 +162,15 @@ impl OutputZoomState {
 }
 
 impl ZoomState {
+    pub fn new(seat: Seat<State>, config: &ZoomConfig) -> ZoomState {
+        ZoomState {
+            seat,
+            show_overlay: config.show_overlay,
+            increment: config.increment,
+            movement: config.view_moves,
+        }
+    }
+
     pub fn current_seat(&self) -> Seat<State> {
         self.seat.clone()
     }
@@ -185,6 +197,17 @@ impl ZoomState {
             .to_global(output)
     }
 
+    pub fn movement(&self) -> ZoomMovement {
+        self.movement
+    }
+
+    pub fn update_movement(&mut self, output: &Output, movement: ZoomMovement) {
+        self.movement = movement;
+        let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
+        let mut output_state_ref = output_state.lock().unwrap();
+        output_state_ref.previous_point = Some((output_state_ref.focal_point, Instant::now()));
+    }
+
     pub fn animating_focal_point(&self, output: &Output) -> Point<f64, Local> {
         let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
         let output_geometry = output.geometry().to_f64();
@@ -197,6 +220,7 @@ impl ZoomState {
             .as_global();
 
         let mut output_state_ref = output_state.lock().unwrap();
+
         let level = output_state_ref.animating_level();
 
         let focal_point = match self.movement {
@@ -261,6 +285,25 @@ impl ZoomState {
         };
 
         output_state_ref.focal_point = focal_point;
+
+        if let Some((old_point, start)) = output_state_ref.previous_point.as_ref() {
+            let duration_since = Instant::now().duration_since(*start);
+            if duration_since > ANIMATION_DURATION {
+                output_state_ref.previous_point.take();
+                return focal_point;
+            }
+            let percentage =
+                duration_since.as_millis() as f32 / ANIMATION_DURATION.as_millis() as f32;
+
+            output_state_ref.focal_point = ease(
+                Linear,
+                EasePoint(*old_point),
+                EasePoint(focal_point),
+                percentage,
+            )
+            .0;
+            return output_state_ref.focal_point;
+        }
 
         focal_point
     }

@@ -1521,7 +1521,7 @@ impl Common {
                     output,
                     1.0,
                     state.increment,
-                    state.movement,
+                    state.movement(),
                     self.event_loop_handle.clone(),
                     shell.theme.clone(),
                 ))
@@ -1553,14 +1553,17 @@ impl Common {
         shell_ref.appearance_conf = self.config.cosmic_conf.appearance_settings;
         if let Some(zoom_state) = shell_ref.zoom_state.as_mut() {
             zoom_state.increment = self.config.cosmic_conf.accessibility_zoom.increment;
-            zoom_state.movement = self.config.cosmic_conf.accessibility_zoom.view_moves;
+            zoom_state.update_movement(
+                &zoom_state.seat.active_output(),
+                self.config.cosmic_conf.accessibility_zoom.view_moves,
+            );
             zoom_state.show_overlay = self.config.cosmic_conf.accessibility_zoom.show_overlay;
 
             for output in shell_ref.workspaces.sets.keys() {
                 let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
                 let mut output_state_ref = output_state.lock().unwrap();
                 let level = output_state_ref.level;
-                output_state_ref.update(level, false, zoom_state.movement, zoom_state.increment);
+                output_state_ref.update(level, false, zoom_state.movement(), zoom_state.increment);
             }
         }
 
@@ -2460,12 +2463,7 @@ impl Shell {
             });
         }
 
-        self.zoom_state = Some(ZoomState {
-            seat: seat.clone(),
-            show_overlay: zoom_config.show_overlay,
-            increment: zoom_config.increment,
-            movement: zoom_config.view_moves,
-        });
+        self.zoom_state = Some(ZoomState::new(seat.clone(), zoom_config));
     }
 
     pub fn zoom_state(&self) -> Option<&ZoomState> {
