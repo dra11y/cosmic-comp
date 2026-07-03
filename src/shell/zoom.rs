@@ -114,7 +114,7 @@ impl OutputZoomState {
     }
 
     pub fn is_animating(&self) -> bool {
-        self.previous_level.is_some()
+        self.previous_point.is_some() || self.previous_level.is_some()
     }
 
     pub fn refresh(&mut self) -> bool {
@@ -202,6 +202,9 @@ impl ZoomState {
     }
 
     pub fn update_movement(&mut self, output: &Output, movement: ZoomMovement) {
+        if self.movement == movement {
+            return;
+        }
         self.movement = movement;
         let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
         let mut output_state_ref = output_state.lock().unwrap();
