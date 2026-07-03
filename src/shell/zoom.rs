@@ -132,7 +132,13 @@ impl OutputZoomState {
     }
 
     pub fn update(&mut self, level: f64, animate: bool, movement: ZoomMovement, increment: u32) {
-        self.previous_level = animate.then_some((self.animating_level(), Instant::now()));
+        if animate {
+            let now = Instant::now();
+            self.previous_level = Some((self.animating_level(), now));
+            if movement == ZoomMovement::OnEdge {
+                self.previous_point = Some((self.focal_point, now));
+            }
+        }
         self.level = level;
         self.element.set_additional_scale(level.min(4.));
         self.element.queue_message(ZoomMessage::Update {
@@ -232,78 +238,75 @@ impl ZoomState {
         let mut output_state_ref = output_state.lock().unwrap();
 
         let level = output_state_ref.animating_level();
+        let center = Point::from((
+            output_geometry.loc.x + output_geometry.size.w / 2.0,
+            output_geometry.loc.y + output_geometry.size.h / 2.0,
+        ));
 
-        let focal_point = match self.movement {
-            ZoomMovement::Continuously => cursor_position.to_local(output),
-            ZoomMovement::Centered => {
-                let center = Point::from((
-                    output_geometry.loc.x + output_geometry.size.w / 2.0,
-                    output_geometry.loc.y + output_geometry.size.h / 2.0,
-                ));
-
-                if level <= 1.0 {
-                    output_state_ref.focal_point = center;
-                    return center;
-                }
-
-                // Compute translation to keep cursor at center of screen
-                let mut tx = center.x - cursor_position.x * level;
-                let mut ty = center.y - cursor_position.y * level;
-
-                // Clamp translation to keep viewport within screen bounds
-                tx = tx.clamp(output_geometry.size.w * (1.0 - level), 0.0);
-                ty = ty.clamp(output_geometry.size.h * (1.0 - level), 0.0);
-
-                // Convert translation back to focal point:  T = F * (1 - level)
-                Point::from((tx / (1.0 - level), ty / (1.0 - level)))
+        let focal_point = 'compute: {
+            if level <= 1.0 {
+                break 'compute center;
             }
-            ZoomMovement::OnEdge => {
-                if level <= 1.0 {
-                    return output_state_ref.focal_point;
+
+            match self.movement {
+                ZoomMovement::Continuously => cursor_position.to_local(output),
+                ZoomMovement::Centered => {
+                    // Compute translation to keep cursor at center of screen
+                    let mut tx = center.x - cursor_position.x * level;
+                    let mut ty = center.y - cursor_position.y * level;
+
+                    // Clamp translation to keep viewport within screen bounds
+                    tx = tx.clamp(output_geometry.size.w * (1.0 - level), 0.0);
+                    ty = ty.clamp(output_geometry.size.h * (1.0 - level), 0.0);
+
+                    // Convert translation back to focal point:  T = F * (1 - level)
+                    Point::from((tx / (1.0 - level), ty / (1.0 - level)))
                 }
+                ZoomMovement::OnEdge => {
+                    // Compute small margin relative to zoomed output to keep cursor within
+                    let margin_size = zoomed_output_geometry.size.h * ON_EDGE_VERTICAL_MARGIN;
+                    let margins =
+                        FrameExtents::new(margin_size, margin_size, margin_size, margin_size);
+                    let inner_rect = zoomed_output_geometry - margins;
 
-                // Compute small margin relative to zoomed output to keep cursor within
-                let margin_size = zoomed_output_geometry.size.h * ON_EDGE_VERTICAL_MARGIN;
-                let margins = FrameExtents::new(margin_size, margin_size, margin_size, margin_size);
-                let inner_rect = zoomed_output_geometry - margins;
+                    if inner_rect.contains(cursor_position) {
+                        // Do not move if cursor within margins
+                        break 'compute output_state_ref.focal_point;
+                    }
 
-                if inner_rect.contains(cursor_position) {
-                    // Do not move if cursor within margins
-                    return output_state_ref.focal_point;
+                    // Compute dx and dy to move the zoomed output based on cursor distance outside margin(s)
+                    let dx = if cursor_position.x < inner_rect.loc.x {
+                        cursor_position.x - inner_rect.loc.x
+                    } else if cursor_position.x > inner_rect.loc.x + inner_rect.size.w {
+                        cursor_position.x - (inner_rect.loc.x + inner_rect.size.w)
+                    } else {
+                        0.0
+                    };
+                    let dy = if cursor_position.y < inner_rect.loc.y {
+                        cursor_position.y - inner_rect.loc.y
+                    } else if cursor_position.y > inner_rect.loc.y + inner_rect.size.h {
+                        cursor_position.y - (inner_rect.loc.y + inner_rect.size.h)
+                    } else {
+                        0.0
+                    };
+
+                    let focal_global = output_state_ref.focal_point.to_global(output);
+
+                    // Scale dx and dy up to the current zoom level
+                    let mut focal_new = focal_global + Point::new(dx * level, dy * level);
+
+                    // Clamp to output
+                    focal_new.x = focal_new.x.clamp(
+                        output_geometry.loc.x,
+                        output_geometry.loc.x + output_geometry.size.w - 1.0,
+                    );
+                    focal_new.y = focal_new.y.clamp(
+                        output_geometry.loc.y,
+                        output_geometry.loc.y + output_geometry.size.h - 1.0,
+                    );
+
+                    focal_new.to_local(output)
                 }
-
-                // Compute dx and dy to move the zoomed output based on cursor distance outside margin(s)
-                let dx = if cursor_position.x < inner_rect.loc.x {
-                    cursor_position.x - inner_rect.loc.x
-                } else if cursor_position.x > inner_rect.loc.x + inner_rect.size.w {
-                    cursor_position.x - (inner_rect.loc.x + inner_rect.size.w)
-                } else {
-                    0.0
-                };
-                let dy = if cursor_position.y < inner_rect.loc.y {
-                    cursor_position.y - inner_rect.loc.y
-                } else if cursor_position.y > inner_rect.loc.y + inner_rect.size.h {
-                    cursor_position.y - (inner_rect.loc.y + inner_rect.size.h)
-                } else {
-                    0.0
-                };
-
-                let focal_global = output_state_ref.focal_point.to_global(output);
-
-                // Scale dx and dy up to the current zoom level
-                let mut focal_new = focal_global + Point::new(dx * level, dy * level);
-
-                // Clamp to output
-                focal_new.x = focal_new.x.clamp(
-                    output_geometry.loc.x,
-                    output_geometry.loc.x + output_geometry.size.w - 1.0,
-                );
-                focal_new.y = focal_new.y.clamp(
-                    output_geometry.loc.y,
-                    output_geometry.loc.y + output_geometry.size.h - 1.0,
-                );
-
-                focal_new.to_local(output)
             }
         };
 
@@ -317,15 +320,17 @@ impl ZoomState {
             }
 
             let percentage =
-                duration_since.as_millis() as f32 / ANIMATION_DURATION.as_millis() as f32;
+                duration_since.as_millis() as f64 / ANIMATION_DURATION.as_millis() as f64;
 
-            return ease(
+            let eased = ease(
                 Linear,
                 EasePoint(*previous_point),
                 EasePoint(focal_point),
                 percentage,
             )
             .0;
+
+            return eased;
         }
 
         focal_point
