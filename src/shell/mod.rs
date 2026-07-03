@@ -1553,8 +1553,7 @@ impl Common {
         shell_ref.appearance_conf = self.config.cosmic_conf.appearance_settings;
         if let Some(zoom_state) = shell_ref.zoom_state.as_mut() {
             zoom_state.increment = self.config.cosmic_conf.accessibility_zoom.increment;
-            let movement = self.config.cosmic_conf.accessibility_zoom.view_moves;
-            zoom_state.movement = movement;
+            zoom_state.movement = self.config.cosmic_conf.accessibility_zoom.view_moves;
             zoom_state.show_overlay = self.config.cosmic_conf.accessibility_zoom.show_overlay;
 
             for output in shell_ref.workspaces.sets.keys() {
