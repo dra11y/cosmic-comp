@@ -46,6 +46,8 @@ use super::{
     grabs::{ContextMenu, Item, MenuAlignment, MenuGrab},
 };
 
+const ON_EDGE_VERTICAL_MARGIN: f64 = 0.01;
+
 #[derive(Debug, Clone)]
 pub struct ZoomState {
     pub(super) seat: Seat<State>,
@@ -201,6 +203,8 @@ impl ZoomState {
         self.movement
     }
 
+    /// Animates the resulting focal point change when the [ZoomMovement] setting is changed while zoomed in.
+    /// Locks [OutputZoomState].
     pub fn update_movement(&mut self, output: &Output, movement: ZoomMovement) {
         if self.movement == movement {
             return;
@@ -211,6 +215,9 @@ impl ZoomState {
         output_state_ref.previous_point = Some((output_state_ref.focal_point, Instant::now()));
     }
 
+    /// Computes the focal point based on the current animating zoom level and movement.
+    /// Animates from [OutputZoomState::previous_point] if set.
+    /// Locks [OutputZoomState].
     pub fn animating_focal_point(&self, output: &Output) -> Point<f64, Local> {
         let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
         let output_geometry = output.geometry().to_f64();
@@ -251,13 +258,21 @@ impl ZoomState {
                 Point::from((tx / (1.0 - level), ty / (1.0 - level)))
             }
             ZoomMovement::OnEdge => {
-                let margin_size = zoomed_output_geometry.size.h * 0.05;
-                let margins = FrameExtents::new(margin_size, margin_size, margin_size, margin_size);
-                let inner_rect = zoomed_output_geometry - margins;
-                if inner_rect.contains(cursor_position) {
+                if level <= 1.0 {
                     return output_state_ref.focal_point;
                 }
 
+                // Compute small margin relative to zoomed output to keep cursor within
+                let margin_size = zoomed_output_geometry.size.h * ON_EDGE_VERTICAL_MARGIN;
+                let margins = FrameExtents::new(margin_size, margin_size, margin_size, margin_size);
+                let inner_rect = zoomed_output_geometry - margins;
+
+                if inner_rect.contains(cursor_position) {
+                    // Do not move if cursor within margins
+                    return output_state_ref.focal_point;
+                }
+
+                // Compute dx and dy to move the zoomed output based on cursor distance outside margin(s)
                 let dx = if cursor_position.x < inner_rect.loc.x {
                     cursor_position.x - inner_rect.loc.x
                 } else if cursor_position.x > inner_rect.loc.x + inner_rect.size.w {
@@ -272,9 +287,13 @@ impl ZoomState {
                 } else {
                     0.0
                 };
+
                 let focal_global = output_state_ref.focal_point.to_global(output);
-                let mut focal_new = focal_global
-                    + Point::new(dx * output_state_ref.level, dy * output_state_ref.level);
+
+                // Scale dx and dy up to the current zoom level
+                let mut focal_new = focal_global + Point::new(dx * level, dy * level);
+
+                // Clamp to output
                 focal_new.x = focal_new.x.clamp(
                     output_geometry.loc.x,
                     output_geometry.loc.x + output_geometry.size.w - 1.0,
@@ -283,29 +302,30 @@ impl ZoomState {
                     output_geometry.loc.y,
                     output_geometry.loc.y + output_geometry.size.h - 1.0,
                 );
+
                 focal_new.to_local(output)
             }
         };
 
         output_state_ref.focal_point = focal_point;
 
-        if let Some((old_point, start)) = output_state_ref.previous_point.as_ref() {
+        if let Some((previous_point, start)) = output_state_ref.previous_point.as_ref() {
             let duration_since = Instant::now().duration_since(*start);
             if duration_since > ANIMATION_DURATION {
                 output_state_ref.previous_point.take();
                 return focal_point;
             }
+
             let percentage =
                 duration_since.as_millis() as f32 / ANIMATION_DURATION.as_millis() as f32;
 
-            output_state_ref.focal_point = ease(
+            return ease(
                 Linear,
-                EasePoint(*old_point),
+                EasePoint(*previous_point),
                 EasePoint(focal_point),
                 percentage,
             )
             .0;
-            return output_state_ref.focal_point;
         }
 
         focal_point
