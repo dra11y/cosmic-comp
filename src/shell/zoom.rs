@@ -208,7 +208,7 @@ impl ZoomState {
                 ));
 
                 if level <= 1.0 {
-                    // focal point is output center at 1x magnification
+                    output_state_ref.focal_point = center;
                     return center;
                 }
 
