@@ -72,7 +72,7 @@ impl OutputExt for Output {
         let focal_point = output_state_ref.current_focal_point().to_global(self);
         let mut zoomed_output_geo = output_geometry.to_f64();
         zoomed_output_geo.loc -= focal_point;
-        zoomed_output_geo = zoomed_output_geo.downscale(output_state_ref.current_level());
+        zoomed_output_geo = zoomed_output_geo.downscale(output_state_ref.animating_level());
         zoomed_output_geo.loc += focal_point;
 
         Some(zoomed_output_geo.to_i32_round())

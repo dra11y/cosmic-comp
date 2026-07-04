@@ -46,7 +46,8 @@ use super::{
     grabs::{ContextMenu, Item, MenuAlignment, MenuGrab},
 };
 
-const ON_EDGE_VERTICAL_MARGIN: f64 = 0.01;
+const ON_EDGE_VERTICAL_MARGIN: f64 = 0.02;
+const MAX_ZOOM: f64 = 100.0;
 
 #[derive(Debug, Clone)]
 pub struct ZoomState {
@@ -139,6 +140,7 @@ impl OutputZoomState {
                 self.previous_point = Some((self.focal_point, now));
             }
         }
+        let level = level.clamp(1.0, MAX_ZOOM);
         self.level = level;
         self.element.set_additional_scale(level.min(4.));
         self.element.queue_message(ZoomMessage::Update {
@@ -244,13 +246,13 @@ impl ZoomState {
         ));
 
         let focal_point = 'compute: {
-            if level <= 1.0 {
-                break 'compute center;
-            }
-
             match self.movement {
                 ZoomMovement::Continuously => cursor_position.to_local(output),
                 ZoomMovement::Centered => {
+                    if level <= 1.0 {
+                        break 'compute center;
+                    }
+
                     // Compute translation to keep cursor at center of screen
                     let mut tx = center.x - cursor_position.x * level;
                     let mut ty = center.y - cursor_position.y * level;
@@ -263,6 +265,10 @@ impl ZoomState {
                     Point::from((tx / (1.0 - level), ty / (1.0 - level)))
                 }
                 ZoomMovement::OnEdge => {
+                    if level <= 1.0 {
+                        break 'compute cursor_position.to_local(output);
+                    }
+
                     // Compute small margin relative to zoomed output to keep cursor within
                     let margin_size = zoomed_output_geometry.size.h * ON_EDGE_VERTICAL_MARGIN;
                     let margins =
