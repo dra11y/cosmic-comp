@@ -2519,6 +2519,7 @@ impl Shell {
             }
 
             if all_outputs_off {
+                tracing::warn!("all outputs off");
                 self.zoom_state.take();
             }
         }

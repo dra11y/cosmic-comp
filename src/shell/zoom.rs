@@ -195,17 +195,17 @@ impl ZoomState {
         output_state.lock().unwrap().animating_level()
     }
 
-    pub fn current_focal_point(&self, output: Option<&Output>) -> Point<f64, Global> {
-        let active_output = self.seat.active_output();
-        let output = output.unwrap_or(&active_output);
-        let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
+    // pub fn current_focal_point(&self, output: Option<&Output>) -> Point<f64, Global> {
+    //     let active_output = self.seat.active_output();
+    //     let output = output.unwrap_or(&active_output);
+    //     let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
 
-        output_state
-            .lock()
-            .unwrap()
-            .current_focal_point()
-            .to_global(output)
-    }
+    //     output_state
+    //         .lock()
+    //         .unwrap()
+    //         .current_focal_point()
+    //         .to_global(output)
+    // }
 
     pub fn movement(&self) -> ZoomMovement {
         self.movement
@@ -227,7 +227,13 @@ impl ZoomState {
     /// Animates from [OutputZoomState::previous_point] if set.
     /// Locks [OutputZoomState].
     pub fn animating_focal_point(&self, output: &Output) -> Point<f64, Local> {
+        tracing::warn!("ZoomState::animating_focal_point");
         let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
+        let level = output_state.lock().unwrap().animating_level();
+        if level <= 1.0 {
+            return Point::new(0., 0.);
+        }
+
         let output_geometry = output.geometry().to_f64();
         let zoomed_output_geometry = output.zoomed_geometry().unwrap().to_f64();
         let cursor_position = self
@@ -237,22 +243,17 @@ impl ZoomState {
             .current_location()
             .as_global();
 
-        let mut output_state_ref = output_state.lock().unwrap();
-
-        let level = output_state_ref.animating_level();
-        let center = Point::from((
+        let center: Point<f64, Global> = Point::from((
             output_geometry.loc.x + output_geometry.size.w / 2.0,
             output_geometry.loc.y + output_geometry.size.h / 2.0,
         ));
+
+        let mut output_state_ref = output_state.lock().unwrap();
 
         let focal_point = 'compute: {
             match self.movement {
                 ZoomMovement::Continuously => cursor_position.to_local(output),
                 ZoomMovement::Centered => {
-                    if level <= 1.0 {
-                        break 'compute center;
-                    }
-
                     // Compute translation to keep cursor at center of screen
                     let mut tx = center.x - cursor_position.x * level;
                     let mut ty = center.y - cursor_position.y * level;
@@ -265,10 +266,6 @@ impl ZoomState {
                     Point::from((tx / (1.0 - level), ty / (1.0 - level)))
                 }
                 ZoomMovement::OnEdge => {
-                    if level <= 1.0 {
-                        break 'compute cursor_position.to_local(output);
-                    }
-
                     // Compute small margin relative to zoomed output to keep cursor within
                     let margin_size = zoomed_output_geometry.size.h * ON_EDGE_VERTICAL_MARGIN;
                     let margins =

@@ -792,6 +792,8 @@ where
         .size
         .as_logical()
         .to_physical_precise_round(scale);
+
+    let _start = Instant::now();
     let (focal_point, zoom_scale) = zoom_level
         .map(|state| {
             (
@@ -800,6 +802,10 @@ where
             )
         })
         .unwrap_or_else(|| ((0., 0.).into(), 1.));
+    tracing::warn!(
+        "animating zoom duration: {}",
+        Instant::now().duration_since(_start).as_micros()
+    );
 
     let crop_to_output = |element: WorkspaceRenderElement<R>| {
         CropRenderElement::from_element(
