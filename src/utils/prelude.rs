@@ -64,18 +64,8 @@ impl OutputExt for Output {
     }
 
     fn zoomed_geometry(&self) -> Option<Rectangle<i32, Global>> {
-        let output_geometry = self.geometry();
-
         let output_state = self.user_data().get::<Mutex<OutputZoomState>>()?;
-        let mut output_state_ref = output_state.lock().unwrap();
-
-        let focal_point = output_state_ref.current_focal_point().to_global(self);
-        let mut zoomed_output_geo = output_geometry.to_f64();
-        zoomed_output_geo.loc -= focal_point;
-        zoomed_output_geo = zoomed_output_geo.downscale(output_state_ref.current_level());
-        zoomed_output_geo.loc += focal_point;
-
-        Some(zoomed_output_geo.to_i32_round())
+        output_state.lock().unwrap().zoomed_geometry()
     }
 
     fn adaptive_sync(&self) -> AdaptiveSync {
