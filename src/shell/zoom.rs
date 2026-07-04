@@ -299,7 +299,7 @@ impl ZoomState {
                     let focal_global = output_state_ref.focal_point.to_global(output);
 
                     // Scale dx and dy up to the current zoom level
-                    let mut focal_new = focal_global + Point::new(dx * level, dy * level);
+                    let mut focal_new = focal_global + Point::new(dx, dy);
 
                     // Clamp to output
                     focal_new.x = focal_new.x.clamp(
