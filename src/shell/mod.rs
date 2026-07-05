@@ -19,7 +19,7 @@ use crate::{
     },
 };
 use cosmic_comp_config::{
-    AppearanceConfig, TileBehavior, ZoomConfig, ZoomMovement,
+    AppearanceConfig, TileBehavior, ZoomConfig,
     workspace::{PinnedWorkspace, WorkspaceLayout, WorkspaceMode},
 };
 use cosmic_config::ConfigSet;
@@ -1515,14 +1515,13 @@ impl Common {
             .workspaces
             .add_output(output, &mut self.workspace_state.update());
 
-        if let Some(state) = shell.zoom_state.as_ref() {
+        if shell.zoom_state.is_some() {
+            let config = self.config.cosmic_conf.accessibility_zoom;
             output.user_data().insert_if_missing_threadsafe(|| {
                 Mutex::new(OutputZoomState::new(
-                    &state.seat,
+                    &config,
                     output,
                     1.0,
-                    state.increment,
-                    state.movement,
                     self.event_loop_handle.clone(),
                     shell.theme.clone(),
                 ))
@@ -1553,15 +1552,15 @@ impl Common {
         shell_ref.active_hint = self.config.cosmic_conf.active_hint;
         shell_ref.appearance_conf = self.config.cosmic_conf.appearance_settings;
         if let Some(zoom_state) = shell_ref.zoom_state.as_mut() {
-            zoom_state.increment = self.config.cosmic_conf.accessibility_zoom.increment;
-            zoom_state.movement = self.config.cosmic_conf.accessibility_zoom.view_moves;
-            zoom_state.show_overlay = self.config.cosmic_conf.accessibility_zoom.show_overlay;
+            let zoom_config = &self.config.cosmic_conf.accessibility_zoom;
+            zoom_state.show_overlay = zoom_config.show_overlay;
 
             for output in shell_ref.workspaces.sets.keys() {
                 let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
-                let mut output_state_ref = output_state.lock().unwrap();
-                let level = output_state_ref.level;
-                output_state_ref.update(level, false, zoom_state.movement, zoom_state.increment);
+                output_state
+                    .lock()
+                    .unwrap()
+                    .update_config(output, zoom_config);
             }
         }
 
@@ -2415,11 +2414,9 @@ impl Shell {
             for output in self.outputs() {
                 output.user_data().insert_if_missing_threadsafe(|| {
                     Mutex::new(OutputZoomState::new(
-                        seat,
+                        zoom_config,
                         output,
                         1.0,
-                        zoom_config.increment,
-                        zoom_config.view_moves,
                         loop_handle.clone(),
                         self.theme.clone(),
                     ))
@@ -2434,25 +2431,21 @@ impl Shell {
             return;
         }
 
-        for output in &outputs {
-            let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
-            output_state.lock().unwrap().update(
-                level,
-                animate,
-                zoom_config.view_moves,
-                zoom_config.increment,
-            );
-        }
-
-        let all_outputs_off = self.outputs().all(|o| {
-            o.user_data()
+        let mut all_outputs_off = true;
+        for output in self.outputs() {
+            let mut output_state = output
+                .user_data()
                 .get::<Mutex<OutputZoomState>>()
                 .unwrap()
                 .lock()
-                .unwrap()
-                .current_level()
-                == 1.0
-        });
+                .unwrap();
+
+            if outputs.contains(&output) {
+                output_state.update_level(level, animate);
+            }
+
+            all_outputs_off = all_outputs_off && output_state.current_level() == 1.0;
+        }
         toggled = toggled || all_outputs_off;
 
         if toggled {
@@ -2465,31 +2458,7 @@ impl Shell {
         self.zoom_state = Some(ZoomState {
             seat: seat.clone(),
             show_overlay: zoom_config.show_overlay,
-            increment: zoom_config.increment,
-            movement: zoom_config.view_moves,
         });
-    }
-
-    pub fn update_focal_point(
-        &mut self,
-        seat: &Seat<State>,
-        original_position: Point<f64, Global>,
-        movement: ZoomMovement,
-    ) {
-        if let Some(state) = self.zoom_state.as_mut() {
-            if &state.seat != seat {
-                return;
-            }
-
-            let cursor_position = seat.get_pointer().unwrap().current_location().as_global();
-
-            state.update_focal_point(
-                &seat.active_output(),
-                cursor_position,
-                original_position,
-                movement,
-            );
-        }
     }
 
     pub fn zoom_state(&self) -> Option<&ZoomState> {
@@ -2586,6 +2555,10 @@ impl Shell {
                     workspace.update_pointer_position(None, self.overview_mode.clone());
                 }
             }
+        }
+
+        if let Some(zoom_state) = self.zoom_state.as_mut() {
+            zoom_state.update_pointer_position(output, location);
         }
     }
 

@@ -7,7 +7,7 @@ use cosmic::{
     iced_widget, theme,
     widget::{self, icon::Named},
 };
-use cosmic_comp_config::ZoomMovement;
+use cosmic_comp_config::{ZoomConfig, ZoomMovement};
 use cosmic_config::ConfigSet;
 use keyframe::{ease, functions::Linear};
 use smithay::{
@@ -50,14 +50,14 @@ use super::{
 pub struct ZoomState {
     pub(super) seat: Seat<State>,
     pub(super) show_overlay: bool,
-    pub(super) increment: u32,
-    pub(super) movement: ZoomMovement,
 }
 
 #[derive(Debug)]
 pub struct OutputZoomState {
-    pub(super) level: f64,
-    pub(super) previous_level: Option<(f64, Instant)>,
+    pointer_position: Point<f64, Local>,
+    level: f64,
+    previous_level: Option<(f64, Instant)>,
+    increment: u32,
     focal_point: Point<f64, Local>,
     previous_point: Option<(Point<f64, Local>, Instant)>,
     movement: ZoomMovement,
@@ -66,47 +66,15 @@ pub struct OutputZoomState {
 
 impl OutputZoomState {
     pub fn new(
-        seat: &Seat<State>,
+        config: &ZoomConfig,
         output: &Output,
         level: f64,
-        increment: u32,
-        movement: ZoomMovement,
         loop_handle: LoopHandle<'static, State>,
         theme: cosmic::Theme,
     ) -> OutputZoomState {
-        let cursor_position = seat.get_pointer().unwrap().current_location().as_global();
         let output_geometry = output.geometry().to_f64();
-        let focal_point = if output_geometry.contains(cursor_position) {
-            match movement {
-                ZoomMovement::Continuously | ZoomMovement::OnEdge => {
-                    cursor_position.to_local(output)
-                }
-                ZoomMovement::Centered => {
-                    let mut zoomed_output_geometry = output.geometry().to_f64().downscale(level);
-                    zoomed_output_geometry.loc =
-                        cursor_position - zoomed_output_geometry.size.downscale(2.).to_point();
-
-                    let mut focal_point = zoomed_output_geometry
-                        .loc
-                        .to_local(output)
-                        .upscale(level)
-                        .to_global(output);
-                    focal_point.x = focal_point.x.clamp(
-                        output_geometry.loc.x,
-                        (output_geometry.loc.x + output_geometry.size.w).next_down(),
-                    );
-                    focal_point.y = focal_point.y.clamp(
-                        output_geometry.loc.y,
-                        (output_geometry.loc.y + output_geometry.size.h).next_down(),
-                    );
-                    focal_point.to_local(output)
-                }
-            }
-        } else {
-            (output_geometry.size.w / 2., output_geometry.size.h / 2.).into()
-        };
-
-        let program = ZoomProgram::new(level, movement, increment);
+        let focal_point = Point::new(0., 0.);
+        let program = ZoomProgram::new(level, config.view_moves, config.increment);
         let element = IcedElement::new(program, Size::default(), loop_handle, theme);
         let mut size = element.minimum_size();
         size.w = (size.w + 32/*TODO: figure out why iced is calculating too little*/)
@@ -121,8 +89,10 @@ impl OutputZoomState {
             previous_level: None,
             focal_point,
             previous_point: None,
-            movement,
+            movement: config.view_moves,
+            increment: config.increment,
             element,
+            pointer_position: focal_point,
         }
     }
 
@@ -171,63 +141,119 @@ impl OutputZoomState {
         self.previous_point.is_some() || self.previous_level.is_some()
     }
 
-    pub fn zoomed_geometry(&self, output: &Output) -> Option<Rectangle<i32, Global>> {
-        let output_geometry = output.geometry();
-        let focal_point = self.current_focal_point().to_global(output);
+    pub fn zoomed_geometry(
+        &self,
+        output: &Output,
+        output_geometry: Option<Rectangle<f64, Local>>,
+    ) -> Rectangle<f64, Local> {
+        let output_geometry =
+            output_geometry.unwrap_or_else(|| output.geometry().to_f64().to_local(output));
+        let focal_point = self.current_focal_point();
         let mut zoomed_output_geo = output_geometry.to_f64();
         zoomed_output_geo.loc -= focal_point;
         zoomed_output_geo = zoomed_output_geo.downscale(self.current_level());
         zoomed_output_geo.loc += focal_point;
-        Some(zoomed_output_geo.to_i32_round())
+        zoomed_output_geo
     }
 
-    pub fn update_focal_point(
-        &mut self,
+    fn global_pos_to_screen_space(
+        &self,
         output: &Output,
-        cursor_position: Point<f64, Global>,
-        // TODO(tgrushka): cursor jump?
-        _original_position: Point<f64, Global>,
-        movement: ZoomMovement,
-    ) {
-        let output_geometry = output.geometry().to_f64();
-        let zoomed_output_geometry = self.zoomed_geometry(output).unwrap().to_f64();
+        pos: impl Into<Point<f64, Global>>,
+    ) -> Point<f64, Local> {
+        let pos = pos.into();
+        let zoomed_output_geometry = self.zoomed_geometry(output, None).to_f64();
+        let level = self.current_level();
 
-        // animate movement type changes
-        if self.movement != movement {
-            self.previous_point = Some((self.focal_point, Instant::now()));
-            self.movement = movement;
+        // lets try to get the global cursor position into screen space
+        let relative_to_zoom_geo = Point::<f64, Local>::from((
+            pos.x - zoomed_output_geometry.loc.x,
+            pos.y - zoomed_output_geometry.loc.y,
+        ));
+        relative_to_zoom_geo.upscale(level)
+    }
+
+    pub fn surface_under(
+        &self,
+        output: &Output,
+        pos: Point<f64, Global>,
+    ) -> Option<(PointerFocusTarget, Point<f64, Global>)> {
+        let output_geometry = output.geometry().to_f64().to_local(output);
+        let zoomed_output_geometry = self.zoomed_geometry(output, Some(output_geometry));
+        let local_pos = self.global_pos_to_screen_space(output, pos);
+
+        let size = self.element.current_size().to_f64().as_local();
+        let location = Point::<f64, Local>::from((
+            output_geometry.size.w / 2. - size.w / 2.,
+            output_geometry.size.h / 4. * 3. - size.h / 2.,
+        ));
+        let area = Rectangle::<_, Local>::new(location, size);
+
+        if area.contains(local_pos) {
+            return Some((PointerFocusTarget::ZoomUI(self.element.clone().into()), {
+                // and vise-versa from screen-space to zoom-space...
+                let scaled_loc = location.downscale(self.level);
+                let global_loc = Point::<f64, Global>::from((scaled_loc.x, scaled_loc.y))
+                    + zoomed_output_geometry.to_global(output).loc;
+
+                // HACK: We do have the right position now `global_loc`, but smithay calculates
+                // the relative position for us... Which will be wrong given the cursor movement will
+                // be scaled, while this element isn't, as it exists in screen-space and not workspace-space.
+                // So we shift the location relatively to make up for the scaled movement...
+                let diff = (pos - global_loc).upscale(self.level - 1.);
+
+                global_loc - diff
+            }));
         }
+
+        None
+    }
+
+    pub fn update_pointer_position(&mut self, output: &Output, location: Point<f64, Local>) {
+        self.pointer_position = location;
+        self.update_focal_point(output);
+    }
+
+    fn update_focal_point(&mut self, output: &Output) {
+        let output_geometry = output.geometry().to_f64().to_local(output);
+        let zoomed_output_geometry = self.zoomed_geometry(output, Some(output_geometry));
+
+        // // animate movement type changes
+        // if self.movement != movement {
+        //     self.previous_point = Some((self.focal_point, Instant::now()));
+        //     self.movement = movement;
+        // }
 
         let level = self.animating_level();
         if level <= 1. {
             return;
         }
 
-        match movement {
-            ZoomMovement::Continuously => self.focal_point = cursor_position.to_local(output),
+        match self.movement {
+            ZoomMovement::Continuously => self.focal_point = self.pointer_position,
             ZoomMovement::OnEdge => {
                 // Compute small margin relative to zoomed output to keep cursor within
                 let margin_size = zoomed_output_geometry.size.h * 0.02;
                 let margins = FrameExtents::new(margin_size, margin_size, margin_size, margin_size);
                 let inner_rect = zoomed_output_geometry - margins;
 
-                if inner_rect.contains(cursor_position) {
+                if inner_rect.contains(self.pointer_position) {
                     // Do not move if cursor within margins
                     return;
                 }
 
                 // Compute dx and dy to move the zoomed output based on cursor distance outside margin(s)
-                let dx = if cursor_position.x < inner_rect.loc.x {
-                    cursor_position.x - inner_rect.loc.x
-                } else if cursor_position.x > inner_rect.loc.x + inner_rect.size.w {
-                    cursor_position.x - (inner_rect.loc.x + inner_rect.size.w)
+                let dx = if self.pointer_position.x < inner_rect.loc.x {
+                    self.pointer_position.x - inner_rect.loc.x
+                } else if self.pointer_position.x > inner_rect.loc.x + inner_rect.size.w {
+                    self.pointer_position.x - (inner_rect.loc.x + inner_rect.size.w)
                 } else {
                     0.0
                 };
-                let dy = if cursor_position.y < inner_rect.loc.y {
-                    cursor_position.y - inner_rect.loc.y
-                } else if cursor_position.y > inner_rect.loc.y + inner_rect.size.h {
-                    cursor_position.y - (inner_rect.loc.y + inner_rect.size.h)
+                let dy = if self.pointer_position.y < inner_rect.loc.y {
+                    self.pointer_position.y - inner_rect.loc.y
+                } else if self.pointer_position.y > inner_rect.loc.y + inner_rect.size.h {
+                    self.pointer_position.y - (inner_rect.loc.y + inner_rect.size.h)
                 } else {
                     0.0
                 };
@@ -253,8 +279,8 @@ impl OutputZoomState {
                 let center = (output_geometry.size / 2.).to_point();
 
                 // Compute translation to keep cursor at center of screen
-                let mut tx = center.x - cursor_position.x * level;
-                let mut ty = center.y - cursor_position.y * level;
+                let mut tx = center.x - self.pointer_position.x * level;
+                let mut ty = center.y - self.pointer_position.y * level;
 
                 // Clamp translation to keep viewport within screen bounds
                 tx = tx.clamp(output_geometry.size.w * (1.0 - level), 0.0);
@@ -278,14 +304,25 @@ impl OutputZoomState {
         self.level == 1. && self.previous_level.is_none()
     }
 
-    pub fn update(&mut self, level: f64, animate: bool, movement: ZoomMovement, increment: u32) {
-        self.previous_level = animate.then_some((self.animating_level(), Instant::now()));
+    pub fn update_config(&mut self, output: &Output, config: &ZoomConfig) {
+        if self.movement != config.view_moves {
+            self.movement = config.view_moves;
+            self.previous_point = Some((self.focal_point, Instant::now()));
+            self.update_focal_point(output);
+        }
+    }
+
+    pub fn update_level(&mut self, level: f64, animate: bool) {
+        if level == self.level {
+            return;
+        }
+        self.previous_level = animate.then(|| (self.animating_level(), Instant::now()));
         self.level = level;
         self.element.set_additional_scale(level.min(4.));
         self.element.queue_message(ZoomMessage::Update {
             level,
-            movement,
-            increment,
+            movement: self.movement,
+            increment: self.increment,
         });
     }
 
@@ -343,24 +380,20 @@ impl ZoomState {
             .to_global(output)
     }
 
-    pub fn zoomed_geometry(&self, output: &Output) -> Option<Rectangle<i32, Global>> {
+    pub fn zoomed_geometry(&self, output: &Output) -> Rectangle<i32, Global> {
         self.output_state(output)
             .lock()
             .unwrap()
-            .zoomed_geometry(output)
+            .zoomed_geometry(output, None)
+            .to_global(output)
+            .to_i32_round()
     }
 
-    pub fn update_focal_point(
-        &mut self,
-        output: &Output,
-        cursor_position: Point<f64, Global>,
-        original_position: Point<f64, Global>,
-        movement: ZoomMovement,
-    ) {
+    pub fn update_pointer_position(&mut self, output: &Output, location: Point<f64, Local>) {
         self.output_state(output)
             .lock()
             .unwrap()
-            .update_focal_point(output, cursor_position, original_position, movement);
+            .update_pointer_position(output, location)
     }
 
     pub fn surface_under(
@@ -368,40 +401,10 @@ impl ZoomState {
         output: &Output,
         pos: Point<f64, Global>,
     ) -> Option<(PointerFocusTarget, Point<f64, Global>)> {
-        let output_geometry = output.geometry();
-        let zoomed_output_geometry = self.zoomed_geometry(output).unwrap().to_f64();
-        let local_pos = global_pos_to_screen_space(pos, output);
-
-        let output_state_ref = self.output_state(output).lock().unwrap();
-
-        let size = output_state_ref.element.current_size().to_f64().as_local();
-        let location = Point::<f64, Local>::from((
-            output_geometry.size.w as f64 / 2. - size.w / 2.,
-            output_geometry.size.h as f64 / 4. * 3. - size.h / 2.,
-        ));
-        let area = Rectangle::<_, Local>::new(location, size);
-
-        if area.contains(local_pos) {
-            return Some((
-                PointerFocusTarget::ZoomUI(output_state_ref.element.clone().into()),
-                {
-                    // and vise-versa from screen-space to zoom-space...
-                    let scaled_loc = location.downscale(output_state_ref.level);
-                    let global_loc = Point::<f64, Global>::from((scaled_loc.x, scaled_loc.y))
-                        + zoomed_output_geometry.loc;
-
-                    // HACK: We do have the right position now `global_loc`, but smithay calculates
-                    // the relative position for us... Which will be wrong given the cursor movement will
-                    // be scaled, while this element isn't, as it exists in screen-space and not workspace-space.
-                    // So we shift the location relatively to make up for the scaled movement...
-                    let diff = (pos - global_loc).upscale(output_state_ref.level - 1.);
-
-                    global_loc - diff
-                },
-            ));
-        }
-
-        None
+        self.output_state(output)
+            .lock()
+            .unwrap()
+            .surface_under(output, pos)
     }
 
     pub fn render<R, C>(renderer: &mut R, output: &Output) -> Vec<C>
@@ -413,28 +416,6 @@ impl ZoomState {
         let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
         output_state.lock().unwrap().render(renderer, output)
     }
-}
-
-fn global_pos_to_screen_space(
-    pos: impl Into<Point<f64, Global>>,
-    output: &Output,
-) -> Point<f64, Local> {
-    let zoom_state = output
-        .user_data()
-        .get::<Mutex<OutputZoomState>>()
-        .unwrap()
-        .lock()
-        .unwrap();
-    let pos = pos.into();
-    let zoomed_output_geometry = zoom_state.zoomed_geometry(output).unwrap().to_f64();
-    let level = zoom_state.current_level();
-
-    // lets try to get the global cursor position into screen space
-    let relative_to_zoom_geo = Point::<f64, Local>::from((
-        pos.x - zoomed_output_geometry.loc.x,
-        pos.y - zoomed_output_geometry.loc.y,
-    ));
-    relative_to_zoom_geo.upscale(level)
 }
 
 pub type ZoomElement = IcedElement<ZoomProgram>;
@@ -580,15 +561,15 @@ impl Program for ZoomProgram {
                             let output = seat.active_output();
 
                             if shell.zoom_state().is_some() {
-                                let location = global_pos_to_screen_space(
-                                    start_data.location().as_global(),
-                                    &output,
-                                );
-
-                                let output_geometry = output.geometry();
                                 let output_state =
                                     output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
                                 let output_state_ref = output_state.lock().unwrap();
+                                let output_geometry = output.geometry();
+
+                                let location = output_state_ref.global_pos_to_screen_space(
+                                    &output,
+                                    start_data.location().as_global(),
+                                );
 
                                 let elem_size =
                                     output_state_ref.element.current_size().to_f64().as_local();
@@ -745,15 +726,15 @@ impl Program for ZoomProgram {
                             let output = seat.active_output();
 
                             if shell.zoom_state().is_some() {
-                                let location = global_pos_to_screen_space(
-                                    start_data.location().as_global(),
-                                    &output,
-                                );
-
                                 let output_geometry = output.geometry();
                                 let output_state =
                                     output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
                                 let output_state_ref = output_state.lock().unwrap();
+
+                                let location = output_state_ref.global_pos_to_screen_space(
+                                    &output,
+                                    start_data.location().as_global(),
+                                );
 
                                 let elem_size =
                                     output_state_ref.element.current_size().to_f64().as_local();

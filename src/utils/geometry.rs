@@ -79,7 +79,7 @@ impl<C: Coordinate> PointGlobalExt<C> for Point<C, Global> {
             .unwrap()
             .lock()
             .unwrap();
-        let zoomed_output_geometry = zoom_state.zoomed_geometry(output).unwrap();
+        let zoomed_output_geometry = zoom_state.zoomed_geometry(output, None).to_global(output);
         let level = zoom_state.current_level();
         let point = (self.to_f64() - zoomed_output_geometry.loc.to_f64())
             .upscale(level)
