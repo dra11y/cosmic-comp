@@ -54,7 +54,7 @@ pub struct ZoomState {
 
 #[derive(Debug)]
 pub struct OutputZoomState {
-    pointer_position: Point<f64, Local>,
+    cursor_position: Point<f64, Local>,
     level: f64,
     previous_level: Option<(f64, Instant)>,
     increment: u32,
@@ -92,11 +92,22 @@ impl OutputZoomState {
             movement: config.view_moves,
             increment: config.increment,
             element,
-            pointer_position: focal_point,
+            cursor_position: focal_point,
         }
     }
 
-    pub fn animating_focal_point(&mut self) -> Point<f64, Local> {
+    pub fn animating_focal_point(&mut self, output: &Output) -> Point<f64, Local> {
+        if self.previous_level.is_some() {
+            // let old_fp = self.focal_point;
+            self.update_focal_point(output);
+            // tracing::warn!(
+            //     "previous_level is some, updated focal point from {:?} to {:?}, previous_point = {:?}",
+            //     old_fp,
+            //     self.focal_point,
+            //     self.previous_point
+            // );
+        }
+
         if let Some((old_point, start)) = self.previous_point.as_ref() {
             let duration_since = Instant::now().duration_since(*start);
             if duration_since > ANIMATION_DURATION {
@@ -148,11 +159,10 @@ impl OutputZoomState {
     ) -> Rectangle<f64, Local> {
         let output_geometry =
             output_geometry.unwrap_or_else(|| output.geometry().to_f64().to_local(output));
-        let focal_point = self.current_focal_point();
         let mut zoomed_output_geo = output_geometry.to_f64();
-        zoomed_output_geo.loc -= focal_point;
-        zoomed_output_geo = zoomed_output_geo.downscale(self.current_level());
-        zoomed_output_geo.loc += focal_point;
+        zoomed_output_geo.loc -= self.focal_point;
+        zoomed_output_geo = zoomed_output_geo.downscale(self.animating_level());
+        zoomed_output_geo.loc += self.focal_point;
         zoomed_output_geo
     }
 
@@ -210,7 +220,11 @@ impl OutputZoomState {
     }
 
     pub fn update_pointer_position(&mut self, output: &Output, location: Point<f64, Local>) {
-        self.pointer_position = location;
+        if self.cursor_position == location {
+            return;
+        }
+        self.cursor_position = location;
+        tracing::warn!("update_pointer_position {location:?}");
         self.update_focal_point(output);
     }
 
@@ -218,42 +232,36 @@ impl OutputZoomState {
         let output_geometry = output.geometry().to_f64().to_local(output);
         let zoomed_output_geometry = self.zoomed_geometry(output, Some(output_geometry));
 
-        // // animate movement type changes
-        // if self.movement != movement {
-        //     self.previous_point = Some((self.focal_point, Instant::now()));
-        //     self.movement = movement;
-        // }
-
-        let level = self.animating_level();
-        if level <= 1. {
+        let animating_level = self.animating_level();
+        if animating_level <= 1. {
             return;
         }
 
         match self.movement {
-            ZoomMovement::Continuously => self.focal_point = self.pointer_position,
+            ZoomMovement::Continuously => self.focal_point = self.cursor_position,
             ZoomMovement::OnEdge => {
                 // Compute small margin relative to zoomed output to keep cursor within
                 let margin_size = zoomed_output_geometry.size.h * 0.02;
                 let margins = FrameExtents::new(margin_size, margin_size, margin_size, margin_size);
                 let inner_rect = zoomed_output_geometry - margins;
 
-                if inner_rect.contains(self.pointer_position) {
+                if inner_rect.contains(self.cursor_position) {
                     // Do not move if cursor within margins
                     return;
                 }
 
                 // Compute dx and dy to move the zoomed output based on cursor distance outside margin(s)
-                let dx = if self.pointer_position.x < inner_rect.loc.x {
-                    self.pointer_position.x - inner_rect.loc.x
-                } else if self.pointer_position.x > inner_rect.loc.x + inner_rect.size.w {
-                    self.pointer_position.x - (inner_rect.loc.x + inner_rect.size.w)
+                let dx = if self.cursor_position.x < inner_rect.loc.x {
+                    self.cursor_position.x - inner_rect.loc.x
+                } else if self.cursor_position.x > inner_rect.loc.x + inner_rect.size.w {
+                    self.cursor_position.x - (inner_rect.loc.x + inner_rect.size.w)
                 } else {
                     0.0
                 };
-                let dy = if self.pointer_position.y < inner_rect.loc.y {
-                    self.pointer_position.y - inner_rect.loc.y
-                } else if self.pointer_position.y > inner_rect.loc.y + inner_rect.size.h {
-                    self.pointer_position.y - (inner_rect.loc.y + inner_rect.size.h)
+                let dy = if self.cursor_position.y < inner_rect.loc.y {
+                    self.cursor_position.y - inner_rect.loc.y
+                } else if self.cursor_position.y > inner_rect.loc.y + inner_rect.size.h {
+                    self.cursor_position.y - (inner_rect.loc.y + inner_rect.size.h)
                 } else {
                     0.0
                 };
@@ -279,15 +287,16 @@ impl OutputZoomState {
                 let center = (output_geometry.size / 2.).to_point();
 
                 // Compute translation to keep cursor at center of screen
-                let mut tx = center.x - self.pointer_position.x * level;
-                let mut ty = center.y - self.pointer_position.y * level;
+                let mut tx = center.x - self.cursor_position.x * animating_level;
+                let mut ty = center.y - self.cursor_position.y * animating_level;
 
                 // Clamp translation to keep viewport within screen bounds
-                tx = tx.clamp(output_geometry.size.w * (1.0 - level), 0.0);
-                ty = ty.clamp(output_geometry.size.h * (1.0 - level), 0.0);
+                tx = tx.clamp(output_geometry.size.w * (1.0 - animating_level), 0.0);
+                ty = ty.clamp(output_geometry.size.h * (1.0 - animating_level), 0.0);
 
                 // Convert translation back to focal point:  T = F * (1 - level)
-                self.focal_point = Point::from((tx / (1.0 - level), ty / (1.0 - level)));
+                self.focal_point =
+                    Point::from((tx / (1.0 - animating_level), ty / (1.0 - animating_level)));
             }
         }
     }
@@ -312,7 +321,8 @@ impl OutputZoomState {
         }
     }
 
-    pub fn update_level(&mut self, level: f64, animate: bool) {
+    pub fn update_level(&mut self, cursor_position: Point<f64, Local>, level: f64, animate: bool) {
+        self.cursor_position = cursor_position;
         if level == self.level {
             return;
         }
@@ -364,7 +374,7 @@ impl ZoomState {
         self.output_state(output)
             .lock()
             .unwrap()
-            .animating_focal_point()
+            .animating_focal_point(output)
             .to_global(output)
     }
 

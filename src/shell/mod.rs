@@ -2432,6 +2432,7 @@ impl Shell {
         }
 
         let mut all_outputs_off = true;
+        let pointer_position = seat.get_pointer().unwrap().current_location().as_global();
         for output in self.outputs() {
             let mut output_state = output
                 .user_data()
@@ -2441,7 +2442,7 @@ impl Shell {
                 .unwrap();
 
             if outputs.contains(&output) {
-                output_state.update_level(level, animate);
+                output_state.update_level(pointer_position.to_local(output), level, animate);
             }
 
             all_outputs_off = all_outputs_off && output_state.current_level() == 1.0;
