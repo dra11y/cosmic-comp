@@ -469,7 +469,8 @@ pub enum CursorMode {
 pub fn cursor_elements<'a, 'frame, R>(
     renderer: &mut R,
     seats: impl Iterator<Item = &'a Seat<State>>,
-    zoom_state: Option<&ZoomState>,
+    focal_point: Point<f64, Local>,
+    zoom_scale: f64,
     theme: &Theme,
     now: Time<Monotonic>,
     output: &Output,
@@ -482,14 +483,6 @@ where
     CosmicMappedRenderElement<R>: RenderElement<R>,
 {
     let scale = output.current_scale().fractional_scale();
-    let (focal_point, zoom_scale) = zoom_state
-        .map(|state| {
-            (
-                state.animating_focal_point(output).to_local(output),
-                state.animating_level(output),
-            )
-        })
-        .unwrap_or_else(|| ((0., 0.).into(), 1.));
     let mut elements = Vec::new();
 
     for seat in seats {
@@ -706,7 +699,7 @@ pub fn workspace_elements<R>(
     _gpu: Option<&DrmNode>,
     renderer: &mut R,
     shell: &Arc<parking_lot::RwLock<Shell>>,
-    zoom_level: Option<&ZoomState>,
+    zoom_state: Option<&ZoomState>,
     now: Time<Monotonic>,
     output: &Output,
     previous: Option<(WorkspaceHandle, usize, WorkspaceDelta)>,
@@ -734,10 +727,20 @@ where
     // that is prone to deadlock with the main-thread on some grabs.
     std::mem::drop(shell_ref);
 
+    let (focal_point, zoom_scale) = zoom_state
+        .map(|state| {
+            (
+                state.animating_focal_point(output).to_local(output),
+                state.animating_level(output),
+            )
+        })
+        .unwrap_or_else(|| ((0., 0.).into(), 1.));
+
     elements.extend(cursor_elements(
         renderer,
         seats.iter(),
-        zoom_level,
+        focal_point,
+        zoom_scale,
         &theme,
         now,
         output,
@@ -792,14 +795,6 @@ where
         .size
         .as_logical()
         .to_physical_precise_round(scale);
-    let (focal_point, zoom_scale) = zoom_level
-        .map(|state| {
-            (
-                state.animating_focal_point(output).to_local(output),
-                state.animating_level(output),
-            )
-        })
-        .unwrap_or_else(|| ((0., 0.).into(), 1.));
 
     let crop_to_output = |element: WorkspaceRenderElement<R>| {
         CropRenderElement::from_element(
@@ -1484,7 +1479,7 @@ pub fn render_workspace<'d, R>(
     age: usize,
     additional_damage: Option<Vec<Rectangle<i32, Logical>>>,
     shell: &Arc<parking_lot::RwLock<Shell>>,
-    zoom_level: Option<&ZoomState>,
+    zoom_state: Option<&ZoomState>,
     now: Time<Monotonic>,
     output: &Output,
     previous: Option<(WorkspaceHandle, usize, WorkspaceDelta)>,
@@ -1504,7 +1499,7 @@ where
         gpu,
         renderer,
         shell,
-        zoom_level,
+        zoom_state,
         now,
         output,
         previous,
