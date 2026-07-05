@@ -173,7 +173,7 @@ impl OutputZoomState {
     ) -> Point<f64, Local> {
         let pos = pos.into();
         let zoomed_output_geometry = self.zoomed_geometry(output, None).to_f64();
-        let level = self.current_level();
+        let level = self.animating_level();
 
         // lets try to get the global cursor position into screen space
         let relative_to_zoom_geo = Point::<f64, Local>::from((
@@ -366,16 +366,12 @@ impl ZoomState {
         self.output_state(output).lock().unwrap().current_level()
     }
 
-    pub fn animating_level(&self, output: &Output) -> f64 {
-        self.output_state(output).lock().unwrap().animating_level()
-    }
-
-    pub fn animating_focal_point(&self, output: &Output) -> Point<f64, Global> {
-        self.output_state(output)
-            .lock()
-            .unwrap()
-            .animating_focal_point(output)
-            .to_global(output)
+    pub fn animating_focal_point_and_level(&self, output: &Output) -> (Point<f64, Local>, f64) {
+        let mut output_state = self.output_state(output).lock().unwrap();
+        (
+            output_state.animating_focal_point(output),
+            output_state.animating_level(),
+        )
     }
 
     pub fn output_state<'a>(&'a self, output: &'a Output) -> &'a Mutex<OutputZoomState> {

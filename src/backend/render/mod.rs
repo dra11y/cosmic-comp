@@ -470,7 +470,7 @@ pub fn cursor_elements<'a, 'frame, R>(
     renderer: &mut R,
     seats: impl Iterator<Item = &'a Seat<State>>,
     focal_point: Point<f64, Local>,
-    zoom_scale: f64,
+    zoom_level: f64,
     theme: &Theme,
     now: Time<Monotonic>,
     output: &Output,
@@ -499,7 +499,7 @@ where
                     seat,
                     location,
                     scale.into(),
-                    zoom_scale,
+                    zoom_level,
                     now,
                     mode != CursorMode::NotDefault,
                 )
@@ -515,7 +515,7 @@ where
                             .as_logical()
                             .to_physical(output.current_scale().fractional_scale())
                             .to_i32_round(),
-                        zoom_scale,
+                        zoom_level,
                     ))
                 }),
             );
@@ -551,7 +551,7 @@ where
                         .as_logical()
                         .to_physical(output.current_scale().fractional_scale())
                         .to_i32_round(),
-                    zoom_scale,
+                    zoom_level,
                 ))
             }));
         }
@@ -581,7 +581,7 @@ where
                     } else {
                         Point::from((0, 0))
                     },
-                    if should_scale { zoom_scale } else { 1.0 },
+                    if should_scale { zoom_level } else { 1.0 },
                 ))
             }));
         }
@@ -727,20 +727,15 @@ where
     // that is prone to deadlock with the main-thread on some grabs.
     std::mem::drop(shell_ref);
 
-    let (focal_point, zoom_scale) = zoom_state
-        .map(|state| {
-            (
-                state.animating_focal_point(output).to_local(output),
-                state.animating_level(output),
-            )
-        })
+    let (focal_point, zoom_level) = zoom_state
+        .map(|state| state.animating_focal_point_and_level(output))
         .unwrap_or_else(|| ((0., 0.).into(), 1.));
 
     elements.extend(cursor_elements(
         renderer,
         seats.iter(),
         focal_point,
-        zoom_scale,
+        zoom_level,
         &theme,
         now,
         output,
@@ -804,7 +799,7 @@ where
                     .as_logical()
                     .to_physical(output.current_scale().fractional_scale())
                     .to_i32_round(),
-                zoom_scale,
+                zoom_level,
             ),
             scale,
             Rectangle::from_size(output_size),
