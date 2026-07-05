@@ -46,6 +46,9 @@ use super::{
     grabs::{ContextMenu, Item, MenuAlignment, MenuGrab},
 };
 
+const ON_EDGE_VERTICAL_MARGIN: f64 = 0.01;
+const MAX_ZOOM: f64 = 100.0;
+
 #[derive(Debug, Clone)]
 pub struct ZoomState {
     pub(super) seat: Seat<State>,
@@ -241,7 +244,7 @@ impl OutputZoomState {
             ZoomMovement::Continuously => self.focal_point = self.cursor_position,
             ZoomMovement::OnEdge => {
                 // Compute small margin relative to zoomed output to keep cursor within
-                let margin_size = zoomed_output_geometry.size.h * 0.02;
+                let margin_size = zoomed_output_geometry.size.h * ON_EDGE_VERTICAL_MARGIN;
                 let margins = FrameExtents::new(margin_size, margin_size, margin_size, margin_size);
                 let inner_rect = zoomed_output_geometry - margins;
 
@@ -327,7 +330,7 @@ impl OutputZoomState {
             return;
         }
         self.previous_level = animate.then(|| (self.animating_level(), Instant::now()));
-        self.level = level;
+        self.level = level.clamp(1.0, MAX_ZOOM);
         self.element.set_additional_scale(level.min(4.));
         self.element.queue_message(ZoomMessage::Update {
             level,
