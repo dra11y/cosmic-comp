@@ -2506,7 +2506,7 @@ where
     B::Device: 'static,
 {
     let geometry = zoom_state
-        .and_then(|_| output.zoomed_geometry())
+        .and_then(|zoom_state| zoom_state.zoomed_geometry(output))
         .unwrap_or_else(|| output.geometry());
     let transform = output.current_transform();
     let size = transform

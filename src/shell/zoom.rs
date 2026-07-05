@@ -189,7 +189,7 @@ impl OutputZoomState {
         movement: ZoomMovement,
     ) {
         let output_geometry = output.geometry().to_f64();
-        let mut zoomed_output_geometry = output.zoomed_geometry().unwrap().to_f64();
+        let mut zoomed_output_geometry = self.zoomed_geometry(output).unwrap().to_f64();
 
         // animate movement type changes
         if self.movement != movement {
@@ -342,6 +342,13 @@ impl ZoomState {
             .to_global(output)
     }
 
+    pub fn zoomed_geometry(&self, output: &Output) -> Option<Rectangle<i32, Global>> {
+        self.output_state(output)
+            .lock()
+            .unwrap()
+            .zoomed_geometry(output)
+    }
+
     pub fn update_focal_point(
         &mut self,
         output: &Output,
@@ -361,7 +368,7 @@ impl ZoomState {
         pos: Point<f64, Global>,
     ) -> Option<(PointerFocusTarget, Point<f64, Global>)> {
         let output_geometry = output.geometry();
-        let zoomed_output_geometry = output.zoomed_geometry().unwrap().to_f64();
+        let zoomed_output_geometry = self.zoomed_geometry(output).unwrap().to_f64();
         let local_pos = global_pos_to_screen_space(pos, output);
 
         let output_state_ref = self.output_state(output).lock().unwrap();
@@ -411,15 +418,15 @@ fn global_pos_to_screen_space(
     pos: impl Into<Point<f64, Global>>,
     output: &Output,
 ) -> Point<f64, Local> {
-    let pos = pos.into();
-    let zoomed_output_geometry = output.zoomed_geometry().unwrap().to_f64();
-    let level = output
+    let zoom_state = output
         .user_data()
         .get::<Mutex<OutputZoomState>>()
         .unwrap()
         .lock()
-        .unwrap()
-        .current_level();
+        .unwrap();
+    let pos = pos.into();
+    let zoomed_output_geometry = zoom_state.zoomed_geometry(output).unwrap().to_f64();
+    let level = zoom_state.current_level();
 
     // lets try to get the global cursor position into screen space
     let relative_to_zoom_geo = Point::<f64, Local>::from((

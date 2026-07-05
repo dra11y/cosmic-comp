@@ -6,10 +6,10 @@ use smithay::{
 };
 
 pub use super::geometry::*;
+use crate::config::EdidProduct;
 pub use crate::shell::{SeatExt, Shell, Workspace};
 pub use crate::state::{Common, State};
 pub use crate::wayland::handlers::xdg_shell::popup::update_reactive_popups;
-use crate::{config::EdidProduct, shell::zoom::OutputZoomState};
 
 use std::{
     cell::{Ref, RefCell, RefMut},
@@ -22,7 +22,6 @@ use std::{
 pub trait OutputExt {
     fn is_internal(&self) -> bool;
     fn geometry(&self) -> Rectangle<i32, Global>;
-    fn zoomed_geometry(&self) -> Option<Rectangle<i32, Global>>;
 
     fn adaptive_sync(&self) -> AdaptiveSync;
     fn set_adaptive_sync(&self, vrr: AdaptiveSync);
@@ -61,14 +60,6 @@ impl OutputExt for Output {
                 .to_i32_round()
         })
         .as_global()
-    }
-
-    fn zoomed_geometry(&self) -> Option<Rectangle<i32, Global>> {
-        self.user_data()
-            .get::<Mutex<OutputZoomState>>()?
-            .lock()
-            .unwrap()
-            .zoomed_geometry(self)
     }
 
     fn adaptive_sync(&self) -> AdaptiveSync {
