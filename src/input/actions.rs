@@ -1096,12 +1096,18 @@ impl State {
             .map(|state| (state.current_seat(), state.current_level(&output)))
             .unwrap_or_else(|| (seat.clone(), 1.0));
 
-        if current_level == 1. && change <= 0. {
+        if change == 0.0 || (current_level == 1. && change < 0.0) {
             return;
         }
 
         if zoom_seat == *seat {
-            let new_level = (current_level + change).max(1.0);
+            let factor = 1.0 + change.abs();
+            let new_level = if change >= 0.0 {
+                (current_level * factor).max(1.0)
+            } else {
+                (current_level / factor).max(1.0)
+            };
+
             shell.trigger_zoom(
                 seat,
                 Some(&output),
