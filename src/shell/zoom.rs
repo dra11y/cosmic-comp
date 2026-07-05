@@ -27,7 +27,7 @@ use smithay::{
         },
     },
     output::Output,
-    utils::{IsAlive, Point, Rectangle, Serial, Size},
+    utils::{FrameExtents, IsAlive, Point, Rectangle, Serial, Size},
 };
 use tracing::error;
 
@@ -185,11 +185,12 @@ impl OutputZoomState {
         &mut self,
         output: &Output,
         cursor_position: Point<f64, Global>,
-        original_position: Point<f64, Global>,
+        // TODO(tgrushka): cursor jump?
+        _original_position: Point<f64, Global>,
         movement: ZoomMovement,
     ) {
         let output_geometry = output.geometry().to_f64();
-        let mut zoomed_output_geometry = self.zoomed_geometry(output).unwrap().to_f64();
+        let zoomed_output_geometry = self.zoomed_geometry(output).unwrap().to_f64();
 
         // animate movement type changes
         if self.movement != movement {
@@ -197,70 +198,70 @@ impl OutputZoomState {
             self.movement = movement;
         }
 
-        let cursor_position = cursor_position.to_local(output);
+        let level = self.animating_level();
+        if level <= 1. {
+            return;
+        }
+
         match movement {
-            ZoomMovement::Continuously => self.focal_point = cursor_position,
+            ZoomMovement::Continuously => self.focal_point = cursor_position.to_local(output),
             ZoomMovement::OnEdge => {
-                if !zoomed_output_geometry
-                    .overlaps_or_touches(Rectangle::new(original_position, Size::from((16., 16.))))
-                {
-                    zoomed_output_geometry.loc = cursor_position.to_global(output)
-                        - zoomed_output_geometry.size.downscale(2.).to_point();
-                    let mut focal_point = zoomed_output_geometry
-                        .loc
-                        .to_local(output)
-                        .upscale(self.level)
-                        .to_global(output);
-                    focal_point.x = focal_point.x.clamp(
-                        output_geometry.loc.x,
-                        output_geometry.loc.x + output_geometry.size.w - 1.,
-                    );
-                    focal_point.y = focal_point.y.clamp(
-                        output_geometry.loc.y,
-                        output_geometry.loc.y + output_geometry.size.h - 1.,
-                    );
-                    self.previous_point = Some((self.focal_point, Instant::now()));
-                    self.focal_point = focal_point.to_local(output);
-                } else if !zoomed_output_geometry.contains(cursor_position.to_global(output)) {
-                    let mut diff = self.focal_point.to_global(output)
-                        + (cursor_position.to_global(output) - original_position)
-                            .upscale(self.level);
-                    diff.x = diff.x.clamp(
-                        output_geometry.loc.x,
-                        (output_geometry.loc.x + output_geometry.size.w).next_down(),
-                    );
-                    diff.y = diff.y.clamp(
-                        output_geometry.loc.y,
-                        (output_geometry.loc.y + output_geometry.size.h).next_down(),
-                    );
-                    diff -= self.focal_point.to_global(output);
+                // Compute small margin relative to zoomed output to keep cursor within
+                let margin_size = zoomed_output_geometry.size.h * 0.02;
+                let margins = FrameExtents::new(margin_size, margin_size, margin_size, margin_size);
+                let inner_rect = zoomed_output_geometry - margins;
 
-                    self.focal_point += diff.as_logical().as_local();
+                if inner_rect.contains(cursor_position) {
+                    // Do not move if cursor within margins
+                    return;
                 }
-            }
-            ZoomMovement::Centered => {
-                zoomed_output_geometry.loc = cursor_position.to_global(output)
-                    - zoomed_output_geometry.size.downscale(2.).to_point();
 
-                let mut focal_point = zoomed_output_geometry
-                    .loc
-                    .to_local(output)
-                    .upscale(
-                        (output_geometry.size.w
-                            / (output_geometry.size.w - zoomed_output_geometry.size.w)
-                                .max(f64::EPSILON))
-                        .max(1.),
-                    )
-                    .to_global(output);
+                // Compute dx and dy to move the zoomed output based on cursor distance outside margin(s)
+                let dx = if cursor_position.x < inner_rect.loc.x {
+                    cursor_position.x - inner_rect.loc.x
+                } else if cursor_position.x > inner_rect.loc.x + inner_rect.size.w {
+                    cursor_position.x - (inner_rect.loc.x + inner_rect.size.w)
+                } else {
+                    0.0
+                };
+                let dy = if cursor_position.y < inner_rect.loc.y {
+                    cursor_position.y - inner_rect.loc.y
+                } else if cursor_position.y > inner_rect.loc.y + inner_rect.size.h {
+                    cursor_position.y - (inner_rect.loc.y + inner_rect.size.h)
+                } else {
+                    0.0
+                };
+
+                let focal_global = self.focal_point.to_global(output);
+
+                // Scale dx and dy up to the current zoom level
+                let mut focal_point = focal_global + Point::new(dx, dy);
+
+                // Clamp to output
                 focal_point.x = focal_point.x.clamp(
                     output_geometry.loc.x,
-                    output_geometry.loc.x + output_geometry.size.w - 1.,
+                    output_geometry.loc.x + output_geometry.size.w - 1.0,
                 );
                 focal_point.y = focal_point.y.clamp(
                     output_geometry.loc.y,
-                    output_geometry.loc.y + output_geometry.size.h - 1.,
+                    output_geometry.loc.y + output_geometry.size.h - 1.0,
                 );
+
                 self.focal_point = focal_point.to_local(output);
+            }
+            ZoomMovement::Centered => {
+                let center = (output_geometry.size / 2.).to_point();
+
+                // Compute translation to keep cursor at center of screen
+                let mut tx = center.x - cursor_position.x * level;
+                let mut ty = center.y - cursor_position.y * level;
+
+                // Clamp translation to keep viewport within screen bounds
+                tx = tx.clamp(output_geometry.size.w * (1.0 - level), 0.0);
+                ty = ty.clamp(output_geometry.size.h * (1.0 - level), 0.0);
+
+                // Convert translation back to focal point:  T = F * (1 - level)
+                self.focal_point = Point::from((tx / (1.0 - level), ty / (1.0 - level)));
             }
         }
     }
