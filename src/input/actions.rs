@@ -1093,7 +1093,7 @@ impl State {
         let mut shell = self.common.shell.write();
         let (zoom_seat, current_level) = shell
             .zoom_state()
-            .map(|state| (state.current_seat(), state.current_level(&output)))
+            .map(|state| (state.current_seat(), state.target_level(&output)))
             .unwrap_or_else(|| (seat.clone(), 1.0));
 
         if current_level == 1. && change <= 0. {

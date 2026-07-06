@@ -16,7 +16,7 @@ impl A11yHandler for State {
 
         if shell
             .zoom_state()
-            .is_some_and(|state| shell.outputs().any(|o| state.current_level(o) != 1.0))
+            .is_some_and(|state| shell.outputs().any(|o| state.target_level(o) != 1.0))
             != enabled
         {
             let seat = shell.seats.last_active().clone();
