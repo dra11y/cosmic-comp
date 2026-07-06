@@ -2454,7 +2454,7 @@ impl Shell {
                 .unwrap()
                 .lock()
                 .unwrap()
-                .current_level()
+                .target_level()
                 == 1.0
         });
         toggled = toggled || all_outputs_off;
