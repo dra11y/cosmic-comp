@@ -46,6 +46,8 @@ use super::{
     grabs::{ContextMenu, Item, MenuAlignment, MenuGrab},
 };
 
+const MAX_ZOOM: f64 = 100.;
+
 #[derive(Debug, Clone)]
 pub struct ZoomState {
     pub(super) seat: Seat<State>,
@@ -108,6 +110,7 @@ impl OutputZoomState {
             return;
         }
         self.movement = movement;
+        self.previous_point = Some((self.focal_point, Instant::now()));
         self.update_focal_point(output);
     }
 
@@ -273,7 +276,11 @@ impl OutputZoomState {
         }
     }
 
-    pub fn animating_focal_point(&mut self) -> Point<f64, Local> {
+    pub fn animating_focal_point(&mut self, output: &Output) -> Point<f64, Local> {
+        if self.previous_level.is_some() {
+            self.update_focal_point(output);
+        }
+
         if let Some((old_point, start)) = self.previous_point.as_ref() {
             let duration_since = Instant::now().duration_since(*start);
             if duration_since > ANIMATION_DURATION {
@@ -330,12 +337,30 @@ impl OutputZoomState {
         self.level == 1. && self.previous_level.is_none()
     }
 
-    pub fn update_level(&mut self, output: &Output, level: f64, animate: bool, increment: u32) {
+    pub fn update_level(
+        &mut self,
+        output: &Output,
+        pointer_position: Point<f64, Local>,
+        level: f64,
+        animate: bool,
+        increment: u32,
+    ) {
+        self.pointer_position = pointer_position;
         if level == self.level {
             return;
         }
-        self.previous_level = animate.then_some((self.animating_level(), Instant::now()));
-        self.level = level;
+        if self.level == 1. {
+            self.focal_point = pointer_position;
+            self.update_focal_point(output);
+        }
+        if animate {
+            let now = Instant::now();
+            self.previous_level = Some((self.animating_level(), now));
+            if self.movement == ZoomMovement::OnEdge {
+                self.previous_point = Some((self.focal_point, now));
+            }
+        }
+        self.level = level.clamp(1.0, MAX_ZOOM);
         self.update_focal_point(output);
         self.element.set_additional_scale(level.min(4.));
         self.element.queue_message(ZoomMessage::Update {
@@ -393,7 +418,7 @@ impl ZoomState {
     pub fn animating_focal_point_and_level(&self, output: &Output) -> (Point<f64, Local>, f64) {
         let mut output_state = self.output_state(output).lock().unwrap();
         (
-            output_state.animating_focal_point(),
+            output_state.animating_focal_point(output),
             output_state.animating_level(),
         )
     }

@@ -2430,10 +2430,18 @@ impl Shell {
             return;
         }
 
+        let pointer_position = seat
+            .get_pointer()
+            .unwrap()
+            .current_location()
+            .to_f64()
+            .as_global();
+
         for output in &outputs {
             let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
             output_state.lock().unwrap().update_level(
                 output,
+                pointer_position.to_local(output),
                 level,
                 animate,
                 zoom_config.increment,
