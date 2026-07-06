@@ -625,11 +625,6 @@ impl State {
 
                     let mut shell = self.common.shell.write();
                     shell.update_pointer_position(position.to_local(&output), &output);
-                    shell.update_focal_point(
-                        &seat,
-                        original_position,
-                        self.common.config.cosmic_conf.accessibility_zoom.view_moves,
-                    );
 
                     if output != current_output {
                         for session in cursor_sessions_for_output(&shell, &current_output) {
@@ -2430,7 +2425,6 @@ impl State {
         };
 
         if let Some((point, output)) = point_and_output {
-            let original_position = pointer.current_location();
             pointer.set_location(point);
 
             let mut shell = self.common.shell.write();
@@ -2443,12 +2437,6 @@ impl State {
                 .cloned();
 
             if let Some(seat) = seat {
-                shell.update_focal_point(
-                    &seat,
-                    original_position.as_global(),
-                    self.common.config.cosmic_conf.accessibility_zoom.view_moves,
-                );
-
                 let output_geometry = output.geometry();
                 for session in cursor_sessions_for_output(&shell, &output) {
                     if let Some((geometry, offset)) = seat.cursor_geometry(
@@ -2505,16 +2493,23 @@ where
     E: AbsolutePositionEvent<B>,
     B::Device: 'static,
 {
+    let output_geometry = output.geometry().to_f64();
     let geometry = zoom_state
-        .and_then(|_| output.zoomed_geometry())
-        .unwrap_or_else(|| output.geometry());
+        .map(|zoom_state| {
+            zoom_state
+                .output_state(output)
+                .lock()
+                .unwrap()
+                .zoomed_geometry_global(output, Some(output_geometry))
+        })
+        .unwrap_or(output_geometry);
     let transform = output.current_transform();
     let size = transform
         .invert()
         .transform_size(geometry.size.as_logical());
     geometry.loc.to_f64()
         + transform
-            .transform_point_in(event.position_transformed(size), &size.to_f64())
+            .transform_point_in(event.position_transformed(size.to_i32_round()), &size)
             .as_global()
 }
 
