@@ -223,33 +223,17 @@ impl ZoomState {
         output_state.lock().unwrap().current_level()
     }
 
-    pub fn animating_level(&self, output: &Output) -> f64 {
-        let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
-        output_state.lock().unwrap().animating_level()
-    }
-
-    pub fn animating_focal_point(&self, output: Option<&Output>) -> Point<f64, Global> {
-        let active_output = self.seat.active_output();
-        let output = output.unwrap_or(&active_output);
-        let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
-
-        output_state
-            .lock()
+    pub fn animating_focal_point_and_level(&self, output: &Output) -> (Point<f64, Local>, f64) {
+        let mut output_state = output
+            .user_data()
+            .get::<Mutex<OutputZoomState>>()
             .unwrap()
-            .animating_focal_point()
-            .to_global(output)
-    }
-
-    pub fn current_focal_point(&self, output: Option<&Output>) -> Point<f64, Global> {
-        let active_output = self.seat.active_output();
-        let output = output.unwrap_or(&active_output);
-        let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
-
-        output_state
             .lock()
-            .unwrap()
-            .current_focal_point()
-            .to_global(output)
+            .unwrap();
+        (
+            output_state.animating_focal_point(),
+            output_state.animating_level(),
+        )
     }
 
     pub fn update_focal_point(
