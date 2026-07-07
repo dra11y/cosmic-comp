@@ -152,14 +152,14 @@ impl OutputZoomState {
         output: &Output,
         pos: Point<f64, Global>,
     ) -> Option<(PointerFocusTarget, Point<f64, Global>)> {
-        let output_geometry = output.geometry().to_f64();
-        let zoomed_output_geometry = self.zoomed_geometry_global(output, Some(output_geometry));
+        let zoomed_output_geometry = self.zoomed_geometry_global(output, None);
         let local_pos = self.global_pos_to_screen_space(pos, output);
         let rect = self.overlay_rect(output);
+        let level = self.animating_level();
         rect.contains(local_pos).then(|| {
             (PointerFocusTarget::ZoomUI(self.element.clone().into()), {
                 // and vise-versa from screen-space to zoom-space...
-                let scaled_loc = rect.loc.downscale(self.level);
+                let scaled_loc = rect.loc.downscale(level);
                 let global_loc = Point::<f64, Global>::from((scaled_loc.x, scaled_loc.y))
                     + zoomed_output_geometry.loc;
 
@@ -624,8 +624,9 @@ impl Program for ZoomProgram {
                                 let level = output_state_ref.level;
                                 std::mem::drop(output_state_ref);
 
-                                let movement_items_iter =
-                                    ZoomMovement::all().into_iter().map(|m| {
+                                let more_items_iter = ZoomMovement::all()
+                                    .into_iter()
+                                    .map(|m| {
                                         let title = match m {
                                             ZoomMovement::Continuously => {
                                                 crate::fl!("a11y-zoom-move-continuously")
@@ -661,12 +662,23 @@ impl Program for ZoomProgram {
                                             });
                                         })
                                         .toggled(movement == m)
-                                    });
+                                    })
+                                    .chain([
+                                        Item::Separator,
+                                        Item::new(crate::fl!("a11y-zoom-settings"), |handle| {
+                                            let _ = handle.insert_idle(move |state| {
+                                                state.spawn_command(
+                                                    "cosmic-settings accessibility-magnifier"
+                                                        .into(),
+                                                );
+                                            });
+                                        }),
+                                    ]);
 
                                 let grab = MenuGrab::new(
                                     start_data,
                                     &seat,
-                                    movement_items_iter,
+                                    more_items_iter,
                                     position.to_global(&output).to_i32_round(),
                                     MenuAlignment::horizontally_centered(
                                         (overlay_rect.size.h / 2.).round() as u32,
