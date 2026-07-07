@@ -78,7 +78,7 @@ fn render_input_order_internal<R: 'static>(
     if shell
         .zoom_state
         .as_ref()
-        .is_some_and(|state| state.is_overlay_visible(output))
+        .is_some_and(|state| state.should_render_overlay(output))
     {
         callback(Stage::ZoomUI)?;
     }

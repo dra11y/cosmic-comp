@@ -1,6 +1,7 @@
-use std::{sync::Mutex, time::Instant};
+use std::{ops::Add, sync::Mutex, time::Instant};
 
 use calloop::LoopHandle;
+use cgmath::Zero;
 use cosmic::{
     Apply,
     iced::{Alignment, Background, Border, Length, alignment::Vertical},
@@ -51,7 +52,21 @@ const MAX_ZOOM: f64 = 100.;
 #[derive(Debug, Clone)]
 pub struct ZoomState {
     pub(super) seat: Seat<State>,
-    pub(super) show_overlay: bool,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+enum OverlayState {
+    FadingIn(Instant),
+    FadingOut(Instant),
+    Visible,
+    #[default]
+    Hidden,
+}
+
+impl OverlayState {
+    fn is_visible(&self) -> bool {
+        !matches!(self, OverlayState::Hidden)
+    }
 }
 
 #[derive(Debug)]
@@ -63,8 +78,8 @@ pub struct OutputZoomState {
     focal_point: Point<f64, Local>,
     previous_point: Option<(Point<f64, Local>, Instant)>,
     element: ZoomElement,
-    fade_start: Option<(Instant, bool)>,
-    menu_open: bool,
+    show_overlay: bool,
+    overlay_state: OverlayState,
 }
 
 impl OutputZoomState {
@@ -96,20 +111,25 @@ impl OutputZoomState {
             previous_point: None,
             element,
             movement: config.view_moves,
-            fade_start: None,
-            menu_open: false,
+            show_overlay: config.show_overlay,
+            overlay_state: OverlayState::default(),
         }
     }
 
     pub fn animating_alpha(&self) -> f32 {
-        if let Some((start, fade_in)) = self.fade_start {
-            let from = (!fade_in).into();
-            let elapsed = Instant::now().duration_since(start);
-            let t = (elapsed.as_millis() as f32 / ANIMATION_DURATION.as_millis() as f32).min(1.0);
-            ease(Linear, from, 1.0 - from, t)
-        } else {
-            (self.level > 1.0).into()
+        let (start, from) = match self.overlay_state {
+            OverlayState::FadingIn(start) => (start, 0.0),
+            OverlayState::FadingOut(start) => (start, 1.0),
+            OverlayState::Visible => return 1.0,
+            OverlayState::Hidden => return 0.0,
+        };
+        let to = 1.0 - from;
+        let elapsed = Instant::now().duration_since(start);
+        let t = (elapsed.as_millis() as f32 / ANIMATION_DURATION.as_millis() as f32).min(1.0);
+        if t == 1.0 {
+            return to;
         }
+        ease(Linear, from, to, t)
     }
 
     pub fn global_pos_to_screen_space(
@@ -142,6 +162,10 @@ impl OutputZoomState {
             self.previous_point = Some((self.focal_point, Instant::now()));
             self.update_focal_point(output);
         }
+        if self.show_overlay != config.show_overlay {
+            self.show_overlay = config.show_overlay;
+            self.update_overlay_state();
+        }
         self.element.queue_message(ZoomMessage::Update {
             level: self.level,
             increment: config.increment,
@@ -149,6 +173,7 @@ impl OutputZoomState {
         });
     }
 
+    /// Source of truth for the [ZoomElement] position in [Local] coordinates.
     pub fn overlay_rect(&self, output: &Output) -> Rectangle<f64, Local> {
         let size = self.element.current_size().to_f64().as_local();
         let output_geometry = output.geometry().to_f64().to_local(output);
@@ -180,8 +205,6 @@ impl OutputZoomState {
                 // be scaled, while this element isn't, as it exists in screen-space and not workspace-space.
                 // So we shift the location relatively to make up for the scaled movement...
                 let diff = (pos - global_loc).upscale(self.level - 1.);
-
-                // warn!("surface_under: {:?}", global_loc - diff);
 
                 global_loc - diff
             })
@@ -340,15 +363,9 @@ impl OutputZoomState {
         {
             self.previous_level.take();
         }
-        if self
-            .fade_start
-            .as_ref()
-            .is_some_and(|(start, _)| Instant::now().duration_since(*start) > ANIMATION_DURATION)
-        {
-            self.fade_start.take();
-        }
+        self.update_overlay_state();
         self.element.refresh();
-        self.level == 1. && self.previous_level.is_none() && self.fade_start.is_none()
+        self.level == 1. && self.previous_level.is_none() && !self.overlay_state.is_visible()
     }
 
     pub fn update_level(
@@ -364,13 +381,17 @@ impl OutputZoomState {
             return;
         }
         if self.level == 1. {
+            // zoom in from 1x: set stale focal point to pointer_position as reasonable default
             self.focal_point = pointer_position;
-            self.update_focal_point(output);
-        }
-        if (self.level > 1.0) != (level > 1.0) {
-            self.fade_start = Some((Instant::now(), level > 1.0));
         }
         let level = level.clamp(1.0, MAX_ZOOM);
+
+        if (self.level > 1.0) != (level > 1.0) {
+            self.level = level;
+            self.update_overlay_state();
+        }
+        self.level = level;
+
         if animate {
             let now = Instant::now();
             self.previous_level = Some((self.animating_level(), now));
@@ -401,7 +422,6 @@ impl OutputZoomState {
             let quantized = (level * 100.).round() / 100.;
             self.element.set_additional_scale(quantized.min(4.));
         }
-        self.level = level;
         self.update_focal_point(output);
 
         self.element.queue_message(ZoomMessage::Update {
@@ -409,6 +429,31 @@ impl OutputZoomState {
             movement: self.movement,
             increment,
         });
+    }
+
+    fn update_overlay_state(&mut self) {
+        let show = self.show_overlay && self.level > 1.0;
+        self.overlay_state = match (&self.overlay_state, show) {
+            (OverlayState::FadingIn(instant), false) => {
+                OverlayState::FadingOut(animation_complement(instant))
+            }
+            (OverlayState::FadingIn(instant), true)
+                if Instant::now().duration_since(*instant) > ANIMATION_DURATION =>
+            {
+                OverlayState::Visible
+            }
+            (OverlayState::FadingOut(instant), true) => {
+                OverlayState::FadingIn(animation_complement(instant))
+            }
+            (OverlayState::FadingOut(instant), false)
+                if Instant::now().duration_since(*instant) > ANIMATION_DURATION =>
+            {
+                OverlayState::Hidden
+            }
+            (OverlayState::Visible, false) => OverlayState::FadingOut(Instant::now()),
+            (OverlayState::Hidden, true) => OverlayState::FadingIn(Instant::now()),
+            _ => self.overlay_state,
+        };
     }
 
     fn render<R, C>(&mut self, renderer: &mut R, output: &Output) -> Vec<C>
@@ -426,19 +471,24 @@ impl OutputZoomState {
     }
 }
 
+fn animation_complement(instant: &Instant) -> Instant {
+    let now = Instant::now();
+    let remaining = ANIMATION_DURATION.saturating_sub(now.duration_since(*instant));
+    now - remaining
+}
+
 impl ZoomState {
-    pub fn new(seat: Seat<State>, show_overlay: bool) -> ZoomState {
-        ZoomState { seat, show_overlay }
+    pub fn new(seat: Seat<State>) -> ZoomState {
+        ZoomState { seat }
     }
 
     pub fn seat(&self) -> &Seat<State> {
         &self.seat
     }
 
-    pub fn is_overlay_visible(&self, output: &Output) -> bool {
+    pub fn should_render_overlay(&self, output: &Output) -> bool {
         let output_state = self.output_state(output).lock().unwrap();
-        self.show_overlay
-            && (output_state.target_level() > 1.0 || output_state.fade_start.is_some())
+        output_state.overlay_state.is_visible()
     }
 
     pub fn seat_and_target_level(&self, output: &Output) -> (Seat<State>, f64) {
