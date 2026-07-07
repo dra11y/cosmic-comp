@@ -50,8 +50,7 @@ const MAX_ZOOM: f64 = 100.;
 
 #[derive(Debug, Clone)]
 pub struct ZoomState {
-    pub(super) seat: Seat<State>,
-    pub(super) show_overlay: bool,
+    seat: Seat<State>,
 }
 
 #[derive(Debug)]
@@ -63,6 +62,7 @@ pub struct OutputZoomState {
     focal_point: Point<f64, Local>,
     previous_point: Option<(Point<f64, Local>, Instant)>,
     element: ZoomElement,
+    show_overlay: bool,
 }
 
 impl OutputZoomState {
@@ -94,6 +94,7 @@ impl OutputZoomState {
             previous_point: None,
             element,
             movement: config.view_moves,
+            show_overlay: config.show_overlay,
         }
     }
 
@@ -127,6 +128,7 @@ impl OutputZoomState {
             self.previous_point = Some((self.focal_point, Instant::now()));
             self.update_focal_point(output);
         }
+        self.show_overlay = config.show_overlay;
         self.element.queue_message(ZoomMessage::Update {
             level: self.level,
             increment: config.increment,
@@ -166,8 +168,6 @@ impl OutputZoomState {
                 // be scaled, while this element isn't, as it exists in screen-space and not workspace-space.
                 // So we shift the location relatively to make up for the scaled movement...
                 let diff = (pos - global_loc).upscale(self.level - 1.);
-
-                // warn!("surface_under: {:?}", global_loc - diff);
 
                 global_loc - diff
             })
@@ -347,7 +347,6 @@ impl OutputZoomState {
             self.update_focal_point(output);
         }
         let level = level.clamp(1.0, MAX_ZOOM);
-        self.level = level;
         if animate {
             let now = Instant::now();
             self.previous_level = Some((self.animating_level(), now));
@@ -355,29 +354,34 @@ impl OutputZoomState {
                 self.previous_point = Some((self.focal_point, now));
             }
 
-            let element = self.element.clone();
-            let output = output.clone();
-            let loop_handle = self.element.loop_handle();
+            if self.show_overlay {
+                let element = self.element.clone();
+                let output = output.clone();
+                let loop_handle = self.element.loop_handle();
 
-            fn tick(handle: LoopHandle<'static, State>, element: ZoomElement, output: Output) {
-                let next_handle = handle.clone();
-                handle.insert_idle(move |_state| {
-                    let mutex = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
-                    let guard = mutex.lock().unwrap();
-                    if guard.is_animating() {
-                        let level = guard.animating_level();
-                        let quantized = (level * 100.).round() / 100.;
-                        element.set_additional_scale(quantized.min(4.));
-                        drop(guard);
-                        tick(next_handle, element, output);
-                    }
-                });
+                // animate the
+                fn tick(handle: LoopHandle<'static, State>, element: ZoomElement, output: Output) {
+                    let next_handle = handle.clone();
+                    handle.insert_idle(move |_state| {
+                        let mutex = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
+                        let guard = mutex.lock().unwrap();
+                        if guard.is_animating() {
+                            let level = guard.animating_level();
+                            let quantized = (level * 100.).round() / 100.;
+                            element.set_additional_scale(quantized.min(4.));
+                            drop(guard);
+                            tick(next_handle, element, output);
+                        }
+                    });
+                }
+                tick(loop_handle, element, output);
             }
-            tick(loop_handle, element, output);
-        } else {
+        } else if self.show_overlay {
             let quantized = (level * 100.).round() / 100.;
             self.element.set_additional_scale(quantized.min(4.));
         }
+        // wait until after animate block to set self.level
+        self.level = level;
         self.update_focal_point(output);
 
         self.element.queue_message(ZoomMessage::Update {
@@ -402,17 +406,17 @@ impl OutputZoomState {
 }
 
 impl ZoomState {
-    pub fn new(seat: Seat<State>, show_overlay: bool) -> ZoomState {
-        ZoomState { seat, show_overlay }
-    }
-
-    pub fn seat(&self) -> &Seat<State> {
-        &self.seat
+    pub fn new(seat: Seat<State>) -> ZoomState {
+        ZoomState { seat }
     }
 
     pub fn seat_and_target_level(&self, output: &Output) -> (Seat<State>, f64) {
         let output_state = self.output_state(output).lock().unwrap();
         (self.seat.clone(), output_state.target_level())
+    }
+
+    pub fn seat(&self) -> &Seat<State> {
+        &self.seat
     }
 
     pub fn current_seat(&self) -> Seat<State> {
@@ -432,6 +436,11 @@ impl ZoomState {
 
     pub fn output_state<'a>(&self, output: &'a Output) -> &'a Mutex<OutputZoomState> {
         output.user_data().get::<Mutex<OutputZoomState>>().unwrap()
+    }
+
+    pub fn should_render_overlay(&self, output: &Output) -> bool {
+        let output_state = self.output_state(output).lock().unwrap();
+        output_state.show_overlay && output_state.target_level() > 1.0
     }
 
     pub fn target_level(&self, output: &Output) -> f64 {
