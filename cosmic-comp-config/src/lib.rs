@@ -209,9 +209,19 @@ impl Default for ZoomConfig {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
 pub enum ZoomMovement {
+    Continuously,
     OnEdge,
     Centered,
-    Continuously,
+}
+
+impl ZoomMovement {
+    pub const fn all() -> [ZoomMovement; 3] {
+        [
+            ZoomMovement::Continuously,
+            ZoomMovement::OnEdge,
+            ZoomMovement::Centered,
+        ]
+    }
 }
 
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]

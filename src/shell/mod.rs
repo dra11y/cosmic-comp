@@ -1556,10 +1556,7 @@ impl Common {
             for output in shell_ref.workspaces.sets.keys() {
                 let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
                 let mut output_state_ref = output_state.lock().unwrap();
-                output_state_ref.update_movement(
-                    output,
-                    self.config.cosmic_conf.accessibility_zoom.view_moves,
-                );
+                output_state_ref.update_config(output, &self.config.cosmic_conf.accessibility_zoom);
             }
         }
 
@@ -2425,7 +2422,7 @@ impl Shell {
 
         let mut toggled = self.zoom_state.is_none();
         if let Some(old_state) = self.zoom_state.as_ref()
-            && &old_state.seat != seat
+            && old_state.seat() != seat
         {
             return;
         }
@@ -2466,10 +2463,7 @@ impl Shell {
             });
         }
 
-        self.zoom_state = Some(ZoomState {
-            seat: seat.clone(),
-            show_overlay: zoom_config.show_overlay,
-        });
+        self.zoom_state = Some(ZoomState::new(seat.clone(), zoom_config.show_overlay));
     }
 
     pub fn zoom_state(&self) -> Option<&ZoomState> {

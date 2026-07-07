@@ -1091,17 +1091,17 @@ impl State {
     pub fn update_zoom(&mut self, seat: &Seat<State>, change: f64, animate: bool) {
         let output = seat.active_output();
         let mut shell = self.common.shell.write();
-        let (zoom_seat, current_level) = shell
+        let (zoom_seat, target_level) = shell
             .zoom_state()
-            .map(|state| (state.current_seat(), state.target_level(&output)))
+            .map(|state| state.seat_and_target_level(&output))
             .unwrap_or_else(|| (seat.clone(), 1.0));
 
-        if current_level == 1. && change <= 0. {
+        if target_level == 1. && change <= 0. {
             return;
         }
 
         if zoom_seat == *seat {
-            let new_level = (current_level + change).max(1.0);
+            let new_level = (target_level + change).max(1.0);
             shell.trigger_zoom(
                 seat,
                 Some(&output),
