@@ -19,7 +19,7 @@ use smithay::{
             AxisFrame, ButtonEvent, Focus, GestureHoldBeginEvent, GestureHoldEndEvent,
             GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent,
             GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent,
-            MotionEvent as PointerMotionEvent, PointerGrab, PointerTarget, RelativeMotionEvent,
+            MotionEvent as PointerMotionEvent, PointerTarget, RelativeMotionEvent,
         },
         touch::{
             DownEvent, FrameMarker, MotionEvent as TouchMotionEvent, OrientationEvent, ShapeEvent,
@@ -29,7 +29,7 @@ use smithay::{
     output::Output,
     utils::{FrameExtents, IsAlive, Point, Rectangle, Serial, Size},
 };
-use tracing::{error, warn};
+use tracing::error;
 
 use crate::{
     state::State,
@@ -63,8 +63,6 @@ pub struct OutputZoomState {
     focal_point: Point<f64, Local>,
     previous_point: Option<(Point<f64, Local>, Instant)>,
     element: ZoomElement,
-    fade_start: Option<(Instant, bool)>,
-    menu_open: bool,
 }
 
 impl OutputZoomState {
@@ -96,19 +94,6 @@ impl OutputZoomState {
             previous_point: None,
             element,
             movement: config.view_moves,
-            fade_start: None,
-            menu_open: false,
-        }
-    }
-
-    pub fn animating_alpha(&self) -> f32 {
-        if let Some((start, fade_in)) = self.fade_start {
-            let from = (!fade_in).into();
-            let elapsed = Instant::now().duration_since(start);
-            let t = (elapsed.as_millis() as f32 / ANIMATION_DURATION.as_millis() as f32).min(1.0);
-            ease(Linear, from, 1.0 - from, t)
-        } else {
-            (self.level > 1.0).into()
         }
     }
 
@@ -149,6 +134,7 @@ impl OutputZoomState {
         });
     }
 
+    /// Source of truth for the [ZoomElement] position in [Local] coordinates.
     pub fn overlay_rect(&self, output: &Output) -> Rectangle<f64, Local> {
         let size = self.element.current_size().to_f64().as_local();
         let output_geometry = output.geometry().to_f64().to_local(output);
@@ -340,15 +326,8 @@ impl OutputZoomState {
         {
             self.previous_level.take();
         }
-        if self
-            .fade_start
-            .as_ref()
-            .is_some_and(|(start, _)| Instant::now().duration_since(*start) > ANIMATION_DURATION)
-        {
-            self.fade_start.take();
-        }
         self.element.refresh();
-        self.level == 1. && self.previous_level.is_none() && self.fade_start.is_none()
+        self.level == 1. && self.previous_level.is_none()
     }
 
     pub fn update_level(
@@ -367,10 +346,8 @@ impl OutputZoomState {
             self.focal_point = pointer_position;
             self.update_focal_point(output);
         }
-        if (self.level > 1.0) != (level > 1.0) {
-            self.fade_start = Some((Instant::now(), level > 1.0));
-        }
         let level = level.clamp(1.0, MAX_ZOOM);
+        self.level = level;
         if animate {
             let now = Instant::now();
             self.previous_level = Some((self.animating_level(), now));
@@ -401,7 +378,6 @@ impl OutputZoomState {
             let quantized = (level * 100.).round() / 100.;
             self.element.set_additional_scale(quantized.min(4.));
         }
-        self.level = level;
         self.update_focal_point(output);
 
         self.element.queue_message(ZoomMessage::Update {
@@ -420,9 +396,8 @@ impl OutputZoomState {
         let rect = self.overlay_rect(output);
         let scale = output.current_scale().fractional_scale();
         let location = rect.loc.as_logical().to_physical(scale).to_i32_round();
-        let alpha = self.animating_alpha();
         self.element
-            .render_elements(renderer, location, scale.into(), alpha)
+            .render_elements(renderer, location, scale.into(), 1.0)
     }
 }
 
@@ -433,12 +408,6 @@ impl ZoomState {
 
     pub fn seat(&self) -> &Seat<State> {
         &self.seat
-    }
-
-    pub fn is_overlay_visible(&self, output: &Output) -> bool {
-        let output_state = self.output_state(output).lock().unwrap();
-        self.show_overlay
-            && (output_state.target_level() > 1.0 || output_state.fade_start.is_some())
     }
 
     pub fn seat_and_target_level(&self, output: &Output) -> (Seat<State>, f64) {
