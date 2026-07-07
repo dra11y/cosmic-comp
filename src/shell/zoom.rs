@@ -29,7 +29,7 @@ use smithay::{
     output::Output,
     utils::{FrameExtents, IsAlive, Point, Rectangle, Serial, Size},
 };
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::{
     state::State,
@@ -63,6 +63,7 @@ pub struct OutputZoomState {
     focal_point: Point<f64, Local>,
     previous_point: Option<(Point<f64, Local>, Instant)>,
     element: ZoomElement,
+    fade_start: Option<(Instant, bool)>,
 }
 
 impl OutputZoomState {
@@ -94,6 +95,18 @@ impl OutputZoomState {
             previous_point: None,
             element,
             movement: config.view_moves,
+            fade_start: None,
+        }
+    }
+
+    pub fn animating_alpha(&self) -> f32 {
+        if let Some((start, fade_in)) = self.fade_start {
+            let from = (!fade_in).into();
+            let elapsed = Instant::now().duration_since(start);
+            let t = (elapsed.as_millis() as f32 / ANIMATION_DURATION.as_millis() as f32).min(1.0);
+            ease(Linear, from, 1.0 - from, t)
+        } else {
+            (self.level > 1.0).into()
         }
     }
 
@@ -121,13 +134,17 @@ impl OutputZoomState {
         self.update_focal_point(output);
     }
 
-    pub fn update_movement(&mut self, output: &Output, movement: ZoomMovement) {
-        if movement == self.movement {
-            return;
+    pub fn update_config(&mut self, output: &Output, config: &ZoomConfig) {
+        if config.view_moves != self.movement {
+            self.movement = config.view_moves;
+            self.previous_point = Some((self.focal_point, Instant::now()));
+            self.update_focal_point(output);
         }
-        self.movement = movement;
-        self.previous_point = Some((self.focal_point, Instant::now()));
-        self.update_focal_point(output);
+        self.element.queue_message(ZoomMessage::Update {
+            level: self.level,
+            increment: config.increment,
+            movement: config.view_moves,
+        });
     }
 
     pub fn surface_under(
@@ -318,8 +335,15 @@ impl OutputZoomState {
         {
             self.previous_level.take();
         }
+        if self
+            .fade_start
+            .as_ref()
+            .is_some_and(|(start, _)| Instant::now().duration_since(*start) > ANIMATION_DURATION)
+        {
+            self.fade_start.take();
+        }
         self.element.refresh();
-        self.level == 1. && self.previous_level.is_none()
+        self.level == 1. && self.previous_level.is_none() && self.fade_start.is_none()
     }
 
     pub fn update_level(
@@ -334,20 +358,49 @@ impl OutputZoomState {
         if level == self.level {
             return;
         }
+        warn!("update_level: {level}");
         if self.level == 1. {
             self.focal_point = pointer_position;
             self.update_focal_point(output);
         }
+        if (self.level > 1.0) != (level > 1.0) {
+            self.fade_start = Some((Instant::now(), level > 1.0));
+            warn!("set fade_start to {:?}", self.fade_start);
+        }
+        let level = level.clamp(1.0, MAX_ZOOM);
         if animate {
             let now = Instant::now();
             self.previous_level = Some((self.animating_level(), now));
             if self.movement == ZoomMovement::OnEdge {
                 self.previous_point = Some((self.focal_point, now));
             }
+
+            let element = self.element.clone();
+            let output = output.clone();
+            let loop_handle = self.element.loop_handle();
+
+            fn tick(handle: LoopHandle<'static, State>, element: ZoomElement, output: Output) {
+                let next_handle = handle.clone();
+                handle.insert_idle(move |_state| {
+                    let mutex = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
+                    let guard = mutex.lock().unwrap();
+                    if guard.is_animating() {
+                        let level = guard.animating_level();
+                        let quantized = (level * 100.).round() / 100.;
+                        element.set_additional_scale(quantized.min(4.));
+                        drop(guard);
+                        tick(next_handle, element, output);
+                    }
+                });
+            }
+            tick(loop_handle, element, output);
+        } else {
+            let quantized = (level * 100.).round() / 100.;
+            self.element.set_additional_scale(quantized.min(4.));
         }
-        self.level = level.clamp(1.0, MAX_ZOOM);
+        self.level = level;
         self.update_focal_point(output);
-        self.element.set_additional_scale(level.min(4.));
+
         self.element.queue_message(ZoomMessage::Update {
             level,
             movement: self.movement,
@@ -363,20 +416,44 @@ impl OutputZoomState {
     {
         let size = self.element.current_size().to_f64();
         let output_geo = output.geometry().to_f64();
-        let scale = output.current_scale();
+        let scale = output.current_scale().fractional_scale();
         let location = Point::from((
             output_geo.size.w / 2. - size.w / 2.,
             output_geo.size.h / 4. * 3. - size.h / 2.,
         ))
-        .to_physical(scale.fractional_scale())
+        .to_physical(scale)
         .to_i32_round();
-
+        let alpha = self.animating_alpha();
+        if alpha > 0. {
+            warn!("animating_alpha = {alpha}");
+        }
         self.element
-            .render_elements(renderer, location, scale.fractional_scale().into(), 1.0)
+            .render_elements(renderer, location, scale.into(), alpha)
     }
 }
 
 impl ZoomState {
+    pub fn new(seat: Seat<State>, show_overlay: bool) -> ZoomState {
+        ZoomState { seat, show_overlay }
+    }
+
+    pub fn seat(&self) -> &Seat<State> {
+        &self.seat
+    }
+
+    pub fn is_overlay_visible(&self, output: &Output) -> bool {
+        let output_state = self.output_state(output).lock().unwrap();
+        let is_visible = self.show_overlay
+            && (output_state.target_level() > 1.0 || output_state.fade_start.is_some());
+        warn!("is_overlay_visible = {is_visible}");
+        is_visible
+    }
+
+    pub fn seat_and_target_level(&self, output: &Output) -> (Seat<State>, f64) {
+        let output_state = self.output_state(output).lock().unwrap();
+        (self.seat.clone(), output_state.target_level())
+    }
+
     pub fn current_seat(&self) -> Seat<State> {
         self.seat.clone()
     }
@@ -585,111 +662,49 @@ impl Program for ZoomProgram {
                                 let level = output_state_ref.level;
                                 std::mem::drop(output_state_ref);
 
+                                let movement_items_iter =
+                                    ZoomMovement::all().into_iter().map(|m| {
+                                        let title = match m {
+                                            ZoomMovement::Continuously => {
+                                                crate::fl!("a11y-zoom-move-continuously")
+                                            }
+                                            ZoomMovement::OnEdge => {
+                                                crate::fl!("a11y-zoom-move-onedge")
+                                            }
+                                            ZoomMovement::Centered => {
+                                                crate::fl!("a11y-zoom-move-centered")
+                                            }
+                                        };
+                                        Item::new(title, move |handle| {
+                                            let _ = handle.insert_idle(move |state| {
+                                                state
+                                                    .common
+                                                    .config
+                                                    .cosmic_conf
+                                                    .accessibility_zoom
+                                                    .view_moves = m;
+                                                if let Err(err) =
+                                                    state.common.config.cosmic_helper.set(
+                                                        "accessibility_zoom",
+                                                        state
+                                                            .common
+                                                            .config
+                                                            .cosmic_conf
+                                                            .accessibility_zoom,
+                                                    )
+                                                {
+                                                    error!(?err, "Failed to update zoom config");
+                                                }
+                                                state.common.update_config();
+                                            });
+                                        })
+                                        .toggled(movement == m)
+                                    });
+
                                 let grab = MenuGrab::new(
                                     start_data,
                                     &seat,
-                                    vec![
-                                        Item::new(
-                                            crate::fl!("a11y-zoom-move-continuously"),
-                                            move |handle| {
-                                                let _ = handle.insert_idle(move |state| {
-                                                    state
-                                                        .common
-                                                        .config
-                                                        .cosmic_conf
-                                                        .accessibility_zoom
-                                                        .view_moves = ZoomMovement::Continuously;
-                                                    if let Err(err) =
-                                                        state.common.config.cosmic_helper.set(
-                                                            "accessibility_zoom",
-                                                            state
-                                                                .common
-                                                                .config
-                                                                .cosmic_conf
-                                                                .accessibility_zoom,
-                                                        )
-                                                    {
-                                                        error!(
-                                                            ?err,
-                                                            "Failed to update zoom config"
-                                                        );
-                                                    }
-                                                    state.common.update_config();
-                                                });
-                                            },
-                                        )
-                                        .toggled(movement == ZoomMovement::Continuously),
-                                        Item::new(
-                                            crate::fl!("a11y-zoom-move-onedge"),
-                                            move |handle| {
-                                                let _ = handle.insert_idle(move |state| {
-                                                    state
-                                                        .common
-                                                        .config
-                                                        .cosmic_conf
-                                                        .accessibility_zoom
-                                                        .view_moves = ZoomMovement::OnEdge;
-                                                    if let Err(err) =
-                                                        state.common.config.cosmic_helper.set(
-                                                            "accessibility_zoom",
-                                                            state
-                                                                .common
-                                                                .config
-                                                                .cosmic_conf
-                                                                .accessibility_zoom,
-                                                        )
-                                                    {
-                                                        error!(
-                                                            ?err,
-                                                            "Failed to update zoom config"
-                                                        );
-                                                    }
-                                                    state.common.update_config();
-                                                });
-                                            },
-                                        )
-                                        .toggled(movement == ZoomMovement::OnEdge),
-                                        Item::new(
-                                            crate::fl!("a11y-zoom-move-centered"),
-                                            move |handle| {
-                                                let _ = handle.insert_idle(move |state| {
-                                                    state
-                                                        .common
-                                                        .config
-                                                        .cosmic_conf
-                                                        .accessibility_zoom
-                                                        .view_moves = ZoomMovement::Centered;
-                                                    if let Err(err) =
-                                                        state.common.config.cosmic_helper.set(
-                                                            "accessibility_zoom",
-                                                            state
-                                                                .common
-                                                                .config
-                                                                .cosmic_conf
-                                                                .accessibility_zoom,
-                                                        )
-                                                    {
-                                                        error!(
-                                                            ?err,
-                                                            "Failed to update zoom config"
-                                                        );
-                                                    }
-                                                    state.common.update_config();
-                                                });
-                                            },
-                                        )
-                                        .toggled(movement == ZoomMovement::Centered),
-                                        Item::Separator,
-                                        Item::new(crate::fl!("a11y-zoom-settings"), |handle| {
-                                            let _ = handle.insert_idle(move |state| {
-                                                state.spawn_command(
-                                                    "cosmic-settings accessibility-magnifier"
-                                                        .into(),
-                                                );
-                                            });
-                                        }),
-                                    ]
-                                    .into_iter(),
+                                    movement_items_iter,
                                     position.to_global(&output).to_i32_round(),
                                     MenuAlignment::horizontally_centered(
                                         (elem_size.h / 2.).round() as u32,
@@ -711,6 +726,7 @@ impl Program for ZoomProgram {
                                         Focus::Clear,
                                     );
                                 }
+                                state.backend.schedule_render(&output);
                             }
                         }
                     });
@@ -719,6 +735,7 @@ impl Program for ZoomProgram {
             ZoomMessage::Increment => {
                 if let Some((seat, serial)) = last_seat.cloned() {
                     let increments = self.increments.clone();
+                    let increment_idx = self.increment_idx;
                     let _ = loop_handle.insert_idle(move |state| {
                         if let Some(start_data) =
                             check_grab_preconditions(&seat, Some(serial), None)
@@ -753,7 +770,7 @@ impl Program for ZoomProgram {
                                 let grab = MenuGrab::new(
                                     start_data,
                                     &seat,
-                                    increments.into_iter().map(|val| {
+                                    increments.into_iter().enumerate().map(|(idx, val)| {
                                         Item::new(format!("{}%", val), move |handle| {
                                             let _ = handle.insert_idle(move |state| {
                                                 state
@@ -777,6 +794,7 @@ impl Program for ZoomProgram {
                                                 }
                                             });
                                         })
+                                        .toggled(idx == increment_idx)
                                     }),
                                     position.to_global(&output).to_i32_round(),
                                     MenuAlignment::PREFER_CENTERED,
@@ -796,6 +814,7 @@ impl Program for ZoomProgram {
                                         Focus::Clear,
                                     );
                                 }
+                                state.backend.schedule_render(&output);
                             }
                         }
                     });
