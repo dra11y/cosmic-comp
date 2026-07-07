@@ -19,7 +19,7 @@ use smithay::{
             AxisFrame, ButtonEvent, Focus, GestureHoldBeginEvent, GestureHoldEndEvent,
             GesturePinchBeginEvent, GesturePinchEndEvent, GesturePinchUpdateEvent,
             GestureSwipeBeginEvent, GestureSwipeEndEvent, GestureSwipeUpdateEvent,
-            MotionEvent as PointerMotionEvent, PointerTarget, RelativeMotionEvent,
+            MotionEvent as PointerMotionEvent, PointerGrab, PointerTarget, RelativeMotionEvent,
         },
         touch::{
             DownEvent, FrameMarker, MotionEvent as TouchMotionEvent, OrientationEvent, ShapeEvent,
@@ -64,6 +64,7 @@ pub struct OutputZoomState {
     previous_point: Option<(Point<f64, Local>, Instant)>,
     element: ZoomElement,
     fade_start: Option<(Instant, bool)>,
+    menu_open: bool,
 }
 
 impl OutputZoomState {
@@ -96,6 +97,7 @@ impl OutputZoomState {
             element,
             movement: config.view_moves,
             fade_start: None,
+            menu_open: false,
         }
     }
 
@@ -147,6 +149,16 @@ impl OutputZoomState {
         });
     }
 
+    pub fn overlay_rect(&self, output: &Output) -> Rectangle<f64, Local> {
+        let size = self.element.current_size().to_f64().as_local();
+        let output_geometry = output.geometry().to_f64().to_local(output);
+        let location = Point::<f64, Local>::from((
+            output_geometry.size.w / 2. - size.w / 2.,
+            output_geometry.size.h / 4. * 3. - size.h / 2.,
+        ));
+        Rectangle::new(location, size)
+    }
+
     pub fn surface_under(
         &self,
         output: &Output,
@@ -155,18 +167,11 @@ impl OutputZoomState {
         let output_geometry = output.geometry().to_f64();
         let zoomed_output_geometry = self.zoomed_geometry_global(output, Some(output_geometry));
         let local_pos = self.global_pos_to_screen_space(pos, output);
-
-        let size = self.element.current_size().to_f64().as_local();
-        let location = Point::<f64, Local>::from((
-            output_geometry.size.w / 2. - size.w / 2.,
-            output_geometry.size.h / 4. * 3. - size.h / 2.,
-        ));
-        let area = Rectangle::<_, Local>::new(location, size);
-
-        if area.contains(local_pos) {
-            return Some((PointerFocusTarget::ZoomUI(self.element.clone().into()), {
+        let rect = self.overlay_rect(output);
+        rect.contains(local_pos).then(|| {
+            (PointerFocusTarget::ZoomUI(self.element.clone().into()), {
                 // and vise-versa from screen-space to zoom-space...
-                let scaled_loc = location.downscale(self.level);
+                let scaled_loc = rect.loc.downscale(self.level);
                 let global_loc = Point::<f64, Global>::from((scaled_loc.x, scaled_loc.y))
                     + zoomed_output_geometry.loc;
 
@@ -176,11 +181,11 @@ impl OutputZoomState {
                 // So we shift the location relatively to make up for the scaled movement...
                 let diff = (pos - global_loc).upscale(self.level - 1.);
 
-                global_loc - diff
-            }));
-        }
+                // warn!("surface_under: {:?}", global_loc - diff);
 
-        None
+                global_loc - diff
+            })
+        })
     }
 
     pub fn zoomed_geometry(
@@ -358,14 +363,12 @@ impl OutputZoomState {
         if level == self.level {
             return;
         }
-        warn!("update_level: {level}");
         if self.level == 1. {
             self.focal_point = pointer_position;
             self.update_focal_point(output);
         }
         if (self.level > 1.0) != (level > 1.0) {
             self.fade_start = Some((Instant::now(), level > 1.0));
-            warn!("set fade_start to {:?}", self.fade_start);
         }
         let level = level.clamp(1.0, MAX_ZOOM);
         if animate {
@@ -414,19 +417,10 @@ impl OutputZoomState {
         R: Renderer + ImportMem,
         R::TextureId: Send + Clone + 'static,
     {
-        let size = self.element.current_size().to_f64();
-        let output_geo = output.geometry().to_f64();
+        let rect = self.overlay_rect(output);
         let scale = output.current_scale().fractional_scale();
-        let location = Point::from((
-            output_geo.size.w / 2. - size.w / 2.,
-            output_geo.size.h / 4. * 3. - size.h / 2.,
-        ))
-        .to_physical(scale)
-        .to_i32_round();
+        let location = rect.loc.as_logical().to_physical(scale).to_i32_round();
         let alpha = self.animating_alpha();
-        if alpha > 0. {
-            warn!("animating_alpha = {alpha}");
-        }
         self.element
             .render_elements(renderer, location, scale.into(), alpha)
     }
@@ -443,10 +437,8 @@ impl ZoomState {
 
     pub fn is_overlay_visible(&self, output: &Output) -> bool {
         let output_state = self.output_state(output).lock().unwrap();
-        let is_visible = self.show_overlay
-            && (output_state.target_level() > 1.0 || output_state.fade_start.is_some());
-        warn!("is_overlay_visible = {is_visible}");
-        is_visible
+        self.show_overlay
+            && (output_state.target_level() > 1.0 || output_state.fade_start.is_some())
     }
 
     pub fn seat_and_target_level(&self, output: &Output) -> (Seat<State>, f64) {
@@ -646,18 +638,10 @@ impl Program for ZoomProgram {
                                     start_data.location().as_global(),
                                     &output,
                                 );
-
-                                let output_geometry = output.geometry();
-
-                                let elem_size =
-                                    output_state_ref.element.current_size().to_f64().as_local();
-                                let elem_location = Point::<f64, Local>::from((
-                                    output_geometry.size.w as f64 / 2. - elem_size.w / 2.,
-                                    output_geometry.size.h as f64 / 4. * 3. - elem_size.h / 2.,
-                                ));
+                                let overlay_rect = output_state_ref.overlay_rect(&output);
                                 let position = Point::<_, Local>::from((
                                     location.x,
-                                    elem_location.y + elem_size.h / 2.,
+                                    overlay_rect.loc.y + overlay_rect.size.h / 2.,
                                 ));
                                 let level = output_state_ref.level;
                                 std::mem::drop(output_state_ref);
@@ -707,7 +691,7 @@ impl Program for ZoomProgram {
                                     movement_items_iter,
                                     position.to_global(&output).to_i32_round(),
                                     MenuAlignment::horizontally_centered(
-                                        (elem_size.h / 2.).round() as u32,
+                                        (overlay_rect.size.h / 2.).round() as u32,
                                         false,
                                     ),
                                     Some(level.min(4.)),
@@ -751,18 +735,10 @@ impl Program for ZoomProgram {
                                     start_data.location().as_global(),
                                     &output,
                                 );
-
-                                let output_geometry = output.geometry();
-
-                                let elem_size =
-                                    output_state_ref.element.current_size().to_f64().as_local();
-                                let elem_location = Point::<f64, Local>::from((
-                                    output_geometry.size.w as f64 / 2. - elem_size.w / 2.,
-                                    output_geometry.size.h as f64 / 4. * 3. - elem_size.h / 2.,
-                                ));
+                                let overlay_rect = output_state_ref.overlay_rect(&output);
                                 let position = Point::<_, Local>::from((
                                     location.x,
-                                    elem_location.y + (elem_size.h / 2.),
+                                    overlay_rect.loc.y + overlay_rect.size.h / 2.,
                                 ));
                                 let level = output_state_ref.level;
                                 std::mem::drop(output_state_ref);
