@@ -73,14 +73,13 @@ impl<C: Coordinate> PointGlobalExt<C> for Point<C, Global> {
     }
 
     fn to_zoomed(self, output: &Output) -> Point<C, Local> {
-        let zoomed_output_geometry = output.zoomed_geometry().unwrap();
-        let level = output
-            .user_data()
-            .get::<Mutex<OutputZoomState>>()
-            .unwrap()
-            .lock()
-            .unwrap()
-            .current_level();
+        let Some(output_state) = output.user_data().get::<Mutex<OutputZoomState>>() else {
+            return Point::default();
+        };
+        let Some(zoomed_output_geometry) = output.zoomed_geometry() else {
+            return Point::default();
+        };
+        let level = output_state.lock().unwrap().current_level();
         let point = (self.to_f64() - zoomed_output_geometry.loc.to_f64())
             .upscale(level)
             .as_logical();

@@ -217,19 +217,25 @@ impl ZoomState {
     }
 
     pub fn current_level(&self, output: &Output) -> f64 {
-        let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
+        let Some(output_state) = output.user_data().get::<Mutex<OutputZoomState>>() else {
+            return 1.0;
+        };
         output_state.lock().unwrap().current_level()
     }
 
     pub fn animating_level(&self, output: &Output) -> f64 {
-        let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
+        let Some(output_state) = output.user_data().get::<Mutex<OutputZoomState>>() else {
+            return 1.0;
+        };
         output_state.lock().unwrap().animating_level()
     }
 
     pub fn animating_focal_point(&self, output: Option<&Output>) -> Point<f64, Global> {
         let active_output = self.seat.active_output();
         let output = output.unwrap_or(&active_output);
-        let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
+        let Some(output_state) = output.user_data().get::<Mutex<OutputZoomState>>() else {
+            return Point::default();
+        };
 
         output_state
             .lock()
@@ -241,7 +247,9 @@ impl ZoomState {
     pub fn current_focal_point(&self, output: Option<&Output>) -> Point<f64, Global> {
         let active_output = self.seat.active_output();
         let output = output.unwrap_or(&active_output);
-        let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
+        let Some(output_state) = output.user_data().get::<Mutex<OutputZoomState>>() else {
+            return Point::default();
+        };
 
         output_state
             .lock()
@@ -258,9 +266,15 @@ impl ZoomState {
         movement: ZoomMovement,
     ) {
         let output_geometry = output.geometry().to_f64().to_local(output);
-        let zoomed_output_geometry = output.zoomed_geometry().unwrap().to_f64().to_local(output);
-
-        let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
+        let Some(output_state) = output.user_data().get::<Mutex<OutputZoomState>>() else {
+            return;
+        };
+        let Some(zoomed_output_geometry) = output
+            .zoomed_geometry()
+            .map(|geom| geom.to_f64().to_local(output))
+        else {
+            return;
+        };
         let mut output_state_ref = output_state.lock().unwrap();
 
         let level = output_state_ref.current_level();
@@ -359,10 +373,10 @@ impl ZoomState {
         pos: Point<f64, Global>,
     ) -> Option<(PointerFocusTarget, Point<f64, Global>)> {
         let output_geometry = output.geometry();
-        let zoomed_output_geometry = output.zoomed_geometry().unwrap().to_f64();
+        let output_state = output.user_data().get::<Mutex<OutputZoomState>>()?;
+        let zoomed_output_geometry = output.zoomed_geometry()?.to_f64();
         let local_pos = global_pos_to_screen_space(pos, output);
 
-        let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
         let output_state_ref = output_state.lock().unwrap();
 
         let size = output_state_ref.element.current_size().to_f64().as_local();
@@ -400,7 +414,9 @@ impl ZoomState {
         R: AsGlowRenderer + ImportMem,
         R::TextureId: Send + Clone + 'static,
     {
-        let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
+        let Some(output_state) = output.user_data().get::<Mutex<OutputZoomState>>() else {
+            return;
+        };
         output_state.lock().unwrap().render(renderer, output, push)
     }
 }
@@ -410,14 +426,13 @@ fn global_pos_to_screen_space(
     output: &Output,
 ) -> Point<f64, Local> {
     let pos = pos.into();
-    let zoomed_output_geometry = output.zoomed_geometry().unwrap().to_f64();
-    let level = output
-        .user_data()
-        .get::<Mutex<OutputZoomState>>()
-        .unwrap()
-        .lock()
-        .unwrap()
-        .current_level();
+    let Some(output_state) = output.user_data().get::<Mutex<OutputZoomState>>() else {
+        return Point::default();
+    };
+    let Some(zoomed_output_geometry) = output.zoomed_geometry().map(|geom| geom.to_f64()) else {
+        return Point::default();
+    };
+    let level = output_state.lock().unwrap().current_level();
 
     // lets try to get the global cursor position into screen space
     let relative_to_zoom_geo = Point::<f64, Local>::from((
@@ -576,8 +591,11 @@ impl Program for ZoomProgram {
                                 );
 
                                 let output_geometry = output.geometry();
-                                let output_state =
-                                    output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
+                                let Some(output_state) =
+                                    output.user_data().get::<Mutex<OutputZoomState>>()
+                                else {
+                                    return;
+                                };
                                 let output_state_ref = output_state.lock().unwrap();
 
                                 let elem_size =
@@ -755,8 +773,11 @@ impl Program for ZoomProgram {
                                 );
 
                                 let output_geometry = output.geometry();
-                                let output_state =
-                                    output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
+                                let Some(output_state) =
+                                    output.user_data().get::<Mutex<OutputZoomState>>()
+                                else {
+                                    return;
+                                };
                                 let output_state_ref = output_state.lock().unwrap();
 
                                 let elem_size =

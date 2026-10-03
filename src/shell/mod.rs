@@ -1596,7 +1596,9 @@ impl Common {
             zoom_state.show_overlay = self.config.cosmic_conf.accessibility_zoom.show_overlay;
 
             for output in shell_ref.workspaces.sets.keys() {
-                let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
+                let Some(output_state) = output.user_data().get::<Mutex<OutputZoomState>>() else {
+                    continue;
+                };
                 let mut output_state_ref = output_state.lock().unwrap();
                 let level = output_state_ref.level;
                 output_state_ref.update(level, false, zoom_state.movement, zoom_state.increment);
@@ -2516,7 +2518,9 @@ impl Shell {
         }
 
         for output in &outputs {
-            let output_state = output.user_data().get::<Mutex<OutputZoomState>>().unwrap();
+            let Some(output_state) = output.user_data().get::<Mutex<OutputZoomState>>() else {
+                continue;
+            };
             output_state.lock().unwrap().update(
                 level,
                 animate,
@@ -2528,11 +2532,7 @@ impl Shell {
         let all_outputs_off = self.outputs().all(|o| {
             o.user_data()
                 .get::<Mutex<OutputZoomState>>()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .current_level()
-                == 1.0
+                .is_none_or(|state| state.lock().unwrap().current_level() == 1.0)
         });
         toggled = toggled || all_outputs_off;
 
@@ -2625,10 +2625,7 @@ impl Shell {
                     && output
                         .user_data()
                         .get::<Mutex<OutputZoomState>>()
-                        .unwrap()
-                        .lock()
-                        .unwrap()
-                        .refresh();
+                        .is_none_or(|state| state.lock().unwrap().refresh());
             }
 
             if all_outputs_off {
