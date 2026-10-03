@@ -5091,35 +5091,37 @@ impl Shell {
     ) -> OutputPresentationFeedback {
         let mut output_presentation_feedback = OutputPresentationFeedback::new(output);
 
-        if let Some(active) = self.active_space(output) {
-            for fs in active.get_fullscreen_surfaces() {
-                fs.surface.take_presentation_feedback(
-                    &mut output_presentation_feedback,
-                    surface_primary_scanout_output,
-                    |surface, _| {
-                        surface_presentation_feedback_flags_from_states(
-                            surface,
-                            None,
-                            render_element_states,
-                        )
-                    },
-                );
-            }
+        let Some(active) = self.active_space(output) else {
+            return output_presentation_feedback;
+        };
 
-            active.mapped().for_each(|mapped| {
-                mapped.active_window().take_presentation_feedback(
-                    &mut output_presentation_feedback,
-                    surface_primary_scanout_output,
-                    |surface, _| {
-                        surface_presentation_feedback_flags_from_states(
-                            surface,
-                            None,
-                            render_element_states,
-                        )
-                    },
-                );
-            });
+        for fs in active.get_fullscreen_surfaces() {
+            fs.surface.take_presentation_feedback(
+                &mut output_presentation_feedback,
+                surface_primary_scanout_output,
+                |surface, _| {
+                    surface_presentation_feedback_flags_from_states(
+                        surface,
+                        None,
+                        render_element_states,
+                    )
+                },
+            );
         }
+
+        active.mapped().for_each(|mapped| {
+            mapped.active_window().take_presentation_feedback(
+                &mut output_presentation_feedback,
+                surface_primary_scanout_output,
+                |surface, _| {
+                    surface_presentation_feedback_flags_from_states(
+                        surface,
+                        None,
+                        render_element_states,
+                    )
+                },
+            );
+        });
 
         self.override_redirect_windows.iter().for_each(|or| {
             if let Some(wl_surface) = or.wl_surface() {
